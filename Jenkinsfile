@@ -48,20 +48,22 @@ pipeline {
         sh "kubectl -n ${TEST_NS} create configmap prepilot-test-script " +
            "--from-file=test_api.py=${KIT_DIR}/k8s/test/test_api.py " +
            "--dry-run=client -o yaml | kubectl -n ${TEST_NS} apply -f -"
-        // 被测服务(Deployment+Service) + 测试 Job 一起 apply
-        sh "kubectl -n ${TEST_NS} apply -f ${KIT_DIR}/k8s/test/"
 
-        // 关键:把刚构建的镜像直接导入 k3d 节点,改成 IfNotPresent,避免 k3d 节点去 registry 拉取。
+        // 关键:先把刚构建的镜像直接导入 k3d 两个节点,再 apply,避免 k3d 节点去 registry 拉取。
         // 100.82.117.31 是 Mac 的 Tailscale IP,k3d 节点(在 OrbStack 内)未必能路由到/信任该 insecure
         // registry;本地验证已证明 image import + IfNotPresent 这条路稳。Jenkins 容器有 docker socket,
         // 用 docker save -> docker cp -> k3s ctr import 把镜像塞进各节点。
+        // 注意:docker exec 直接跑 k3s ctr(不要套 sh -c,否则引号会被 shell 拆散 -> "No help topic for 'ctr'")。
         sh "docker save ${REGISTRY}/${IMAGE}:latest -o /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-server-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-server-0 sh -c 'k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar'"
+        sh "docker exec k3d-dev-cluster-server-0 k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-agent-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-agent-0 sh -c 'k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar'"
+        sh "docker exec k3d-dev-cluster-agent-0 k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "rm -f /tmp/${IMAGE}-${BUILD_ID}.tar || true"
-        // 让 pod 用本地导入的镜像,不再尝试从 registry 拉
+
+        // 被测服务(Deployment+Service) + 测试 Job 一起 apply(此时镜像已在节点本地)
+        sh "kubectl -n ${TEST_NS} apply -f ${KIT_DIR}/k8s/test/"
+        // 兜底:确保用本地镜像,不尝试从 registry 拉(app.yaml 已写 IfNotPresent,这里无害)
         sh "kubectl -n ${TEST_NS} patch deployment prepilot-app -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"app\",\"imagePullPolicy\":\"IfNotPresent\"}]}}}}'"
 
         // 等 Deployment 就绪(镜像已在节点本地)
