@@ -50,11 +50,26 @@ pipeline {
            "--dry-run=client -o yaml | kubectl -n ${TEST_NS} apply -f -"
         // 被测服务(Deployment+Service) + 测试 Job 一起 apply
         sh "kubectl -n ${TEST_NS} apply -f ${KIT_DIR}/k8s/test/"
-        // 等 Deployment 就绪(镜像已从本地 registry 拉起)
+
+        // 关键:把刚构建的镜像直接导入 k3d 节点,改成 IfNotPresent,避免 k3d 节点去 registry 拉取。
+        // 100.82.117.31 是 Mac 的 Tailscale IP,k3d 节点(在 OrbStack 内)未必能路由到/信任该 insecure
+        // registry;本地验证已证明 image import + IfNotPresent 这条路稳。Jenkins 容器有 docker socket,
+        // 用 docker save -> docker cp -> k3s ctr import 把镜像塞进各节点。
+        sh "docker save ${REGISTRY}/${IMAGE}:latest -o /tmp/${IMAGE}-${BUILD_ID}.tar"
+        sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-server-0:/tmp/"
+        sh "docker exec k3d-dev-cluster-server-0 sh -c 'k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar'"
+        sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-agent-0:/tmp/"
+        sh "docker exec k3d-dev-cluster-agent-0 sh -c 'k3s ctr images import /tmp/${IMAGE}-${BUILD_ID}.tar'"
+        sh "rm -f /tmp/${IMAGE}-${BUILD_ID}.tar || true"
+        // 让 pod 用本地导入的镜像,不再尝试从 registry 拉
+        sh "kubectl -n ${TEST_NS} patch deployment prepilot-app -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"app\",\"imagePullPolicy\":\"IfNotPresent\"}]}}}}'"
+
+        // 等 Deployment 就绪(镜像已在节点本地)
         sh "kubectl -n ${TEST_NS} rollout status deployment/prepilot-app --timeout=180s"
         // 等测试 Job 跑完(脚本内部已重试等 app 就绪;失败则 Job 非 0 退出 -> 此处超时失败)
         sh "kubectl -n ${TEST_NS} wait --for=condition=complete job/prepilot-test --timeout=300s"
-        sh "kubectl -n ${TEST_NS} logs job/prepilot-test"
+        // 本环境 kubectl logs 偶发 502,失败不影响结论(wait 已证明 pytest 通过);用 || true 防误判
+        sh "kubectl -n ${TEST_NS} logs job/prepilot-test || true"
       }
     }
 
