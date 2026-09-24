@@ -17,7 +17,8 @@ pipeline {
   environment {
     REGISTRY = '100.82.117.31:5000'
     IMAGE    = 'fastapi-app'
-    TAG      = "build-${BUILD_ID}"
+    TAG      = "build-${BUILD_ID}"      // amd64,推 registry,云端 Ansible 部署用
+    TEST_TAG = "test-${BUILD_ID}"       // 原生 arm64,仅本地 k3d 测试用,不推 registry
     APP_DIR  = '/srv/prepilot_fastapi'
     KIT_DIR  = '/srv/kit'
     TEST_NS  = "prepilot-test-${BUILD_ID}"
@@ -32,12 +33,16 @@ pipeline {
 
     stage('2 构建 & 推送镜像') {
       steps {
-        // Mac 是 arm,云端是 amd64,必须 --platform linux/amd64
+        // 2a) 云端是 amd64,必须构建 amd64 镜像并推送到 registry(Ansible 部署云端用 :TAG)
         sh "docker build --platform linux/amd64 -t ${REGISTRY}/${IMAGE}:${TAG} ${APP_DIR}"
-        // 同时打 :latest(k3d 测试阶段用,清单里写的是 latest),与部署用的 :TAG 是同一份构建产物
-        sh "docker tag ${REGISTRY}/${IMAGE}:${TAG} ${REGISTRY}/${IMAGE}:latest"
         sh "docker push ${REGISTRY}/${IMAGE}:${TAG}"
-        sh "docker push ${REGISTRY}/${IMAGE}:latest"
+
+        // 2b) 本地 k3d 节点是 arm64(M1/OrbStack)。单独构建一份【原生 arm64】镜像只用于本地
+        //     pytest,不推 registry;直接 import 进节点,彻底规避 "amd64 镜像在 arm64 节点上 ctr
+        //     import 报 no match for platform" 的问题(原生 arch 与节点一致,导入即干净解包)。
+        //     不推 :latest / :TEST_TAG,确保 IfNotPresent 一定用本地导入的镜像,绝不回退去拉 registry。
+        sh "docker build -t ${REGISTRY}/${IMAGE}:${TEST_TAG} ${APP_DIR}"
+        sh "docker save ${REGISTRY}/${IMAGE}:${TEST_TAG} -o /tmp/${IMAGE}-${BUILD_ID}.tar"
       }
     }
 
@@ -49,30 +54,25 @@ pipeline {
            "--from-file=test_api.py=${KIT_DIR}/k8s/test/test_api.py " +
            "--dry-run=client -o yaml | kubectl -n ${TEST_NS} apply -f -"
 
-        // 关键:先把刚构建的镜像直接导入 k3d 两个节点的 containerd,再 apply,避免 k3d 节点去 registry 拉取。
-        // 100.82.117.31 是 Mac 的 Tailscale IP,k3d 节点(在 OrbStack 内)未必能路由到/信任该 insecure
-        // registry;本地验证已证明 image import + IfNotPresent 这条路稳。Jenkins 容器有 docker socket,
-        // 用 docker save -> docker cp -> ctr import 把镜像塞进各节点。
-        // 注意:
-        //  1) 必须用节点内【裸 ctr】(containerd CLI)+ 显式 k3s socket(/run/k3s/containerd/containerd.sock)
-        //     与 k8s.io 命名空间;【不能】用 "k3s ctr" —— docker exec 下 k3s 子命令分发失败,报
-        //     "No help topic for 'ctr'"。
-        //  2) 必须加 --all-platforms:构建镜像是 linux/amd64,而 k3d 节点是 arm64(OrbStack/M1),
-        //     ctr 默认按节点平台解包会报 "no match for platform in manifest"。--all-platforms 让 ctr
-        //     导入归档内全部平台(此处仅 amd64)并据此解包,靠 OrbStack 的 amd64 模拟跑起来。
-        //  中途可能出现 "content digest ... not found" 的 ERRO 行属正常(层异步写入),末行
-        //  Successfully imported + 退出码 0 即可。
-        sh "docker save ${REGISTRY}/${IMAGE}:latest -o /tmp/${IMAGE}-${BUILD_ID}.tar"
+        // 关键:把刚构建的原生 arm64 测试镜像直接导入 k3d 两个节点的 containerd,再 apply,
+        // 避免节点去 registry 拉取。100.82.117.31 是 Mac 的 Tailscale IP,k3d 节点(OrbStack 内)
+        // 未必能路由到/信任该 insecure registry。Jenkins 容器有 docker socket,用 docker cp ->
+        // 节点内【裸 ctr】(containerd CLI)+ 显式 k3s socket(/run/k3s/containerd/containerd.sock)
+        // 与 k8s.io 命名空间。注意【不能】用 "k3s ctr" —— docker exec 下 k3s 子命令分发失败,
+        // 报 "No help topic for 'ctr'"。原生 arm64 与节点 arch 一致,裸 ctr import 即可干净解包;
+        // 中途偶有 "content digest ... not found" 的 ERRO 行属正常(层异步写入),末行
+        // Successfully imported + 退出码 0 即可。
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-server-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-server-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import --all-platforms /tmp/${IMAGE}-${BUILD_ID}.tar"
+        sh "docker exec k3d-dev-cluster-server-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-agent-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-agent-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import --all-platforms /tmp/${IMAGE}-${BUILD_ID}.tar"
+        sh "docker exec k3d-dev-cluster-agent-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "rm -f /tmp/${IMAGE}-${BUILD_ID}.tar || true"
 
         // 被测服务(Deployment+Service) + 测试 Job 一起 apply(此时镜像已在节点本地)
         sh "kubectl -n ${TEST_NS} apply -f ${KIT_DIR}/k8s/test/"
-        // 兜底:确保用本地镜像,不尝试从 registry 拉(app.yaml 已写 IfNotPresent,这里无害)
-        sh "kubectl -n ${TEST_NS} patch deployment prepilot-app -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"app\",\"imagePullPolicy\":\"IfNotPresent\"}]}}}}'"
+        // 把 Deployment 镜像从清单里的 :latest 改成这次导入的原生 arm64 :TEST_TAG,并强制
+        // IfNotPresent:确保测试 Pod 用本地导入的镜像,绝不从 registry 拉(:TEST_TAG 本来就不在 registry)。
+        sh "kubectl -n ${TEST_NS} patch deployment prepilot-app -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"app\",\"image\":\"${REGISTRY}/${IMAGE}:${TEST_TAG}\",\"imagePullPolicy\":\"IfNotPresent\"}]}}}}'"
 
         // 等 Deployment 就绪(镜像已在节点本地)
         sh "kubectl -n ${TEST_NS} rollout status deployment/prepilot-app --timeout=180s"
