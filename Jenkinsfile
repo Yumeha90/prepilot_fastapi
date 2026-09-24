@@ -53,16 +53,20 @@ pipeline {
         // 100.82.117.31 是 Mac 的 Tailscale IP,k3d 节点(在 OrbStack 内)未必能路由到/信任该 insecure
         // registry;本地验证已证明 image import + IfNotPresent 这条路稳。Jenkins 容器有 docker socket,
         // 用 docker save -> docker cp -> ctr import 把镜像塞进各节点。
-        // 注意:必须用节点内的【裸 ctr】(containerd CLI),并显式指定 k3s 的 containerd socket
-        // (/run/k3s/containerd/containerd.sock) 与 k8s.io 命名空间;【不能】用 "k3s ctr" —— 在 docker exec
-        // 环境下 k3s 的子命令分发会失败,报 "No help topic for 'ctr'"(这正是之前卡住的根因)。
-        // 裸 ctr 正是 k3d image import 在节点内实际执行的命令;中途可能出现 "content digest ... not found"
-        // 的 ERRO 行属正常(层异步写入),只要末行 Successfully imported 且退出码 0 即可。
+        // 注意:
+        //  1) 必须用节点内【裸 ctr】(containerd CLI)+ 显式 k3s socket(/run/k3s/containerd/containerd.sock)
+        //     与 k8s.io 命名空间;【不能】用 "k3s ctr" —— docker exec 下 k3s 子命令分发失败,报
+        //     "No help topic for 'ctr'"。
+        //  2) 必须加 --all-platforms:构建镜像是 linux/amd64,而 k3d 节点是 arm64(OrbStack/M1),
+        //     ctr 默认按节点平台解包会报 "no match for platform in manifest"。--all-platforms 让 ctr
+        //     导入归档内全部平台(此处仅 amd64)并据此解包,靠 OrbStack 的 amd64 模拟跑起来。
+        //  中途可能出现 "content digest ... not found" 的 ERRO 行属正常(层异步写入),末行
+        //  Successfully imported + 退出码 0 即可。
         sh "docker save ${REGISTRY}/${IMAGE}:latest -o /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-server-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-server-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import /tmp/${IMAGE}-${BUILD_ID}.tar"
+        sh "docker exec k3d-dev-cluster-server-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import --all-platforms /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "docker cp /tmp/${IMAGE}-${BUILD_ID}.tar k3d-dev-cluster-agent-0:/tmp/"
-        sh "docker exec k3d-dev-cluster-agent-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import /tmp/${IMAGE}-${BUILD_ID}.tar"
+        sh "docker exec k3d-dev-cluster-agent-0 ctr -a /run/k3s/containerd/containerd.sock -n k8s.io images import --all-platforms /tmp/${IMAGE}-${BUILD_ID}.tar"
         sh "rm -f /tmp/${IMAGE}-${BUILD_ID}.tar || true"
 
         // 被测服务(Deployment+Service) + 测试 Job 一起 apply(此时镜像已在节点本地)
