@@ -9,7 +9,7 @@
 //   ssh        /var/jenkins_home/.ssh       (Ansible 经 Tailscale 连云端)
 //
 // GitHub 触发:Jenkins 任务勾 "Build when a change is pushed to GitHub",
-// 本机无公网 IP,用 Tailscale Funnel 暴露 8080 接收 webhook(详见 GITHUB_WEBHOOK_JENKINS_SETUP.md)。
+// 本机无公网 IP,用 Tailscale Funnel 暴露 8080 接收 webhook(详见 docs/webhook-jenkins-setup.md)。
 // webhook 只负责触发;流水线自己 git pull 最新代码(见 stage 1)。
 
 pipeline {

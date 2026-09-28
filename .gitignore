@@ -1,19 +1,43 @@
-# Python
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
 
-# 虚拟环境
+# ---------- 虚拟环境 ----------
 .venv/
 venv/
 env/
+prepilot_env/
 
-# 环境变量 / 密钥
+# ---------- 环境变量 / 密钥（明文 .env 绝不进仓库 / 镜像）----------
 .env
+.env.*
+!.env.example
 *.local
 
-# 编辑器 / OS
+# ---------- 数据库 / 迁移产物 ----------
+*.db
+*.sqlite3
+
+# ---------- 前端 ----------
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/coverage/
+*.tsbuildinfo
+
+# ---------- 编辑器 / OS ----------
 .vscode/
 .idea/
 .DS_Store
+*.swp
+
+# ---------- 日志 ----------
+logs/
+*.log

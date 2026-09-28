@@ -1,0 +1,37 @@
+# 密钥绝不进镜像层（docker history 可见）
+.env
+.env.*
+!.env.example
+
+# 虚拟环境 / 依赖缓存
+prepilot_env/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 版本控制
+.git/
+.gitignore
+
+# 测试 / 工具
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+tests/
+htmlcov/
+.coverage
+
+# 前端（后端镜像不需要前端源码，前端单独构建为静态资源）
+frontend/
+
+# 文档 / 杂项
+*.md
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# 本地联调文件（仅宿主使用）
+docker-compose.yml
+migrations/

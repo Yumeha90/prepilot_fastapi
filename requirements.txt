@@ -1,3 +1,62 @@
-fastapi
-uvicorn
-celery
+# PrepPilot 后端依赖（锁定版本，2026-09-28 解析）
+# Python: 3.12（与 Dockerfile python:3.12-slim 严格一致）
+#
+# AI 编排刻意锁定在「langgraph 0.2.x / langchain-core 0.3.x」线：
+#   - langgraph 0.2.x         要求 langchain-core >= 0.3.0
+#   - langchain-openai 0.2.x  要求 langchain-core >= 0.3.0
+# 勿升级到 langchain 1.x / langgraph 1.x：破坏性变更，langchain-community 已 sunset。
+#
+# 向量库 / 可观测性则「跟随实际部署的服务端版本」：
+#   - pymilvus 3.0.x  <-> Milvus 服务端 3.0.1（k3d helm: milvus-5.0.28, app v3.0.1）
+#     官方兼容表：Milvus 3.0.x -> PyMilvus 3.0.x
+#   - langfuse 4.x    <-> Langfuse 服务端 v4（langfuse_local: langfuse:4）
+#     官方矩阵：Langfuse v4 必须配 Python SDK v4
+# ⚠️ 这两条是 2026-09-28 按「实际已启动的 infra」修正的，原锁定为 pymilvus 2.4.15 / langfuse 2.60.10
+#    （对应 Milvus 2.4 / Langfuse v2），与实际部署不符，已对齐升级。
+
+# ---- Web 框架 ----
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+gunicorn==26.2.0
+python-multipart==0.0.32
+httpx==0.28.1
+
+# ---- 配置 / 校验 ----
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+
+# ---- 数据库 ----
+sqlalchemy==2.1.1
+greenlet==3.5.6
+asyncpg==0.31.0
+
+# ---- 异步任务 / 缓存 ----
+celery==5.6.3
+redis==8.1.0
+
+# ---- 安全 ----
+# 不使用 passlib：1.7.4 与 bcrypt>=4.1 存在 __about__ 兼容缺陷。
+# 直接用 bcrypt 官方 API（hashpw / checkpw），从根上消除该版本陷阱。
+python-jose[cryptography]==3.5.0
+bcrypt==5.0.0
+
+# ---- 重试 ----
+tenacity==9.1.4
+
+# ---- 兼容性钉子（勿删）----
+# setuptools>=81 移除了 pkg_resources，部分依赖仍会在 import 时用到它。
+# 原先是为 pymilvus 2.4.x 钉的（3.0.2 已不再引用 pkg_resources），
+# 现作为通用保险继续保留，避免其他间接依赖踩同一个坑。
+setuptools==80.10.2
+
+# ---- AI 编排 / LLM / 向量库 / 可观测性 ----
+langchain-core==0.3.86
+langchain-openai==0.2.14
+langgraph==0.2.76
+pymilvus==3.0.2
+langfuse==4.15.6
+
+# ---- 测试 ----
+pytest==9.1.1
+pytest-asyncio==1.4.0

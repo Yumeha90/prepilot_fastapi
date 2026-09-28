@@ -1,0 +1,68 @@
+# ============================================================
+# PrepPilot 本地联调依赖（仅本地开发使用，不进生产）
+#   生产：云端自建 Compose（Ansible 下发到 /opt/prepilot_cloud）
+#   说明：Milvus / Prometheus+Grafana / Loki 跑在 k3d（Helm），
+#         Langfuse 走 langfuse_local 的独立 compose，故此处不含。
+#
+# 端口全部避开 infra 已占用端口：
+#   infra: 5432(PG) 6379(Redis) 5672/15672(RabbitMQ) 3000/3030(Langfuse)
+#          8080(Jenkins) 5000(registry) 19530(Milvus) 8081(k3d LB)
+#   本文件: PG 55432 / Redis 56379 / RabbitMQ 55672+55673
+#
+# 用法：docker compose up -d   （停止：docker compose down -v）
+# ============================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: prepilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: prepilot
+      POSTGRES_PASSWORD: prepilot
+      POSTGRES_DB: prepilot
+      TZ: Asia/Shanghai
+    ports:
+      - "55432:5432"
+    volumes:
+      - prepilot_pg_data:/var/lib/postgresql/data
+      # 初始化 SQL（migrations/001_init.sql 亦可通过 migrate.py 执行）
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prepilot -d prepilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: prepilot-redis
+    restart: unless-stopped
+    # 对齐 infra 约束：≤256MB，仅作缓存与 Celery result backend
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: prepilot-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: prepilot
+      RABBITMQ_DEFAULT_PASS: prepilot
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "55672:5672"    # amqp
+      - "55673:15672"   # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  prepilot_pg_data:
