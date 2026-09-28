@@ -1,11 +1,13 @@
 # ============================================================
 # PrepPilot 后端镜像
 # - 基础镜像与本地 venv 严格一致：Python 3.12
-# - --platform linux/amd64：云端为 amd64，本机 Mac 为 arm64，必须交叉构建
+# - 平台：由 `docker build --platform linux/amd64` 注入 TARGETPLATFORM。
+#   云端为 amd64，本机 Mac 为 arm64，必须交叉构建；缺省回退 linux/amd64。
 #   构建命令：docker build --platform linux/amd64 -t prepilot-backend:test-N .
 # - 非 root 运行；密钥不 COPY（.dockerignore 已排除 .env），由运行时 env 注入
 # ============================================================
-FROM --platform=linux/amd64 python:3.12-slim
+ARG TARGETPLATFORM=linux/amd64
+FROM --platform=${TARGETPLATFORM} python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

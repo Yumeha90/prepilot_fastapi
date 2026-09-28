@@ -32,6 +32,9 @@ frontend/
 .idea/
 .vscode/
 
-# 本地联调文件（仅宿主使用）
+# 本地联调文件（仅宿主使用，不进镜像）
 docker-compose.yml
-migrations/
+
+# 注意：migrations/ 与 migrate.py 必须进镜像 —— 容器启动/运维需要在镜像内执行
+# `python migrate.py` 建表。此前误将其归入本组，导致 Jenkins 构建报
+# `COPY ./migrations: not found`，勿再添加回来。
