@@ -77,7 +77,9 @@ pipeline {
         // 等 Deployment 就绪(镜像已在节点本地)
         sh "kubectl -n ${TEST_NS} rollout status deployment/prepilot-app --timeout=180s"
         // 等测试 Job 跑完(脚本内部已重试等 app 就绪;失败则 Job 非 0 退出 -> 此处超时失败)
-        sh "kubectl -n ${TEST_NS} wait --for=condition=complete job/prepilot-test --timeout=300s"
+        // 超时给 600s 余量:Job 内要先 pip 装 pytest,官方源实测 113s,叠加调度曾超 300s 而失败;
+        // 现 test-job.yaml 已指定清华镜像(实测从创建到 Complete 仅 9s),余量用于防网络抖动。
+        sh "kubectl -n ${TEST_NS} wait --for=condition=complete job/prepilot-test --timeout=600s"
         // 本环境 kubectl logs 偶发 502,失败不影响结论(wait 已证明 pytest 通过);用 || true 防误判
         sh "kubectl -n ${TEST_NS} logs job/prepilot-test || true"
       }
