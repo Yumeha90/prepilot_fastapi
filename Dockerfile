@@ -1,25 +1,37 @@
 # ============================================================
 # PrepPilot 后端镜像
 # - 基础镜像与本地 venv 严格一致：Python 3.12
-# - 平台：由 `docker build --platform linux/amd64` 注入 TARGETPLATFORM。
-#   云端为 amd64，本机 Mac 为 arm64，必须交叉构建；缺省回退 linux/amd64。
-#   构建命令：docker build --platform linux/amd64 -t prepilot-backend:test-N .
+# - 目标平台由构建命令 `docker build --platform linux/amd64` 决定：
+#   云端为 amd64，本机 Mac 为 arm64，必须交叉构建。此处不再写死
+#   FROM --platform=常量（会触发 FromPlatformFlagConstDisallowed 警告）。
+# - pip 默认走国内镜像：官方 pypi.org 实测约 80KB/s，大包（pandas/grpcio）
+#   极易断流导致构建失败；清华镜像实测 20MB/s 以上。可用
+#   --build-arg PIP_INDEX_URL=... 覆盖。
+# - 依赖层使用 BuildKit cache mount 持久化 pip 缓存：Dockerfile 变更导致层
+#   缓存失效时，无需重新下载全部 wheel（缓存不进镜像层，不增大体积）。
 # - 非 root 运行；密钥不 COPY（.dockerignore 已排除 .env），由运行时 env 注入
 # ============================================================
-ARG TARGETPLATFORM=linux/amd64
-FROM --platform=${TARGETPLATFORM} python:3.12-slim
+FROM python:3.12-slim
+
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     APP_PORT=8000 \
     PYTHONPATH=/app
 
 WORKDIR /app
 
-# 依赖先行（利用构建缓存）
+# 依赖先行（利用构建缓存 + pip 缓存持久化）
+# 注意：此处刻意不设 PIP_NO_CACHE_DIR，否则 pip 不写 /root/.cache/pip，
+# cache mount 就失去意义；该目录由 cache mount 挂载，不会进入镜像层。
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+        -i ${PIP_INDEX_URL} \
+        --retries 10 \
+        --timeout 120 \
+        -r requirements.txt
 
 # 应用代码
 COPY ./app ./app
