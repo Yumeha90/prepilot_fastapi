@@ -37,6 +37,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY ./app ./app
 COPY ./migrations ./migrations
 COPY ./migrate.py ./migrate.py
+# seed.py：云端部署后写入角色/权限与演示账号（幂等，由 playbook 调用）
+COPY ./scripts ./scripts
 
 # 非 root 用户
 RUN useradd --create-home --shell /bin/bash appuser \

@@ -11,3 +11,14 @@ from app.tasks.celery_app import celery_app
 @celery_app.task(name="prepilot.add")
 def add(x: int, y: int) -> int:
     return x + y
+
+
+@celery_app.task(name="prepilot.mail.send", bind=True, max_retries=2)
+def send_mail(self, to: str, subject: str, body: str) -> None:
+    """异步发信（忘记密码验证码）。失败重试 2 次，仍失败则记录日志。"""
+    from app.services.email import get_email_sender
+
+    try:
+        get_email_sender().send(to, subject, body)
+    except Exception as exc:  # noqa: BLE001
+        raise self.retry(exc=exc, countdown=10)

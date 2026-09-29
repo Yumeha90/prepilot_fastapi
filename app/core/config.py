@@ -45,10 +45,28 @@ class Settings(BaseSettings):
     # ---------- RabbitMQ（Celery broker）----------
     CELERY_BROKER_URL: str = "amqp://guest:guest@localhost:55672//"
 
-    # ---------- JWT ----------
+    # ---------- JWT（短期 access + 可吊销 refresh）----------
     JWT_SECRET: str = "change-me-please"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 60 * 24
+    # 兼容旧字段名：access token 有效期（分钟）
+    JWT_EXPIRE_MINUTES: int = 30
+    # refresh token 有效期（天），落库可吊销
+    JWT_REFRESH_EXPIRE_DAYS: int = 7
+
+    # ---------- 邮件（忘记密码验证码）----------
+    # 未配置 SMTP_HOST 时降级为「只写日志」，不真实发信
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465  # 云服务器 25 端口通常被封，一律走 465 SSL
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_SENDER: str = ""
+    # 开发环境回显验证码（便于无 SMTP 时走通演示流程），生产必须为 false
+    DEV_ECHO_CODE: bool = False
+
+    # ---------- 种子数据（云端部署时是否写入演示数据）----------
+    SEED_DEMO_DATA: bool = True
+
+    # ---------- CORS（本地前端 dev server 端口 5180）----------
 
     # ---------- Milvus（本地 k3d + Helm 部署）----------
     MILVUS_HOST: str = "localhost"
