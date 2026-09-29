@@ -1,5 +1,5 @@
 // 全流水线:GitHub 推送 → Jenkins → 构建 amd64 镜像 → K3d 测试 Pod(pytest 冒烟) →
-//                          Ansible 部署云端 → 公网冒烟 → 清理
+//                          构建前端并发布云端静态目录 → Ansible 部署云端 → 公网冒烟 → 清理
 //
 // 文件位置:prepilot_devops_kit/Jenkinsfile(本仓库根)
 // 依赖挂载(见 jenkins/docker-compose.jenkins.yml):
@@ -85,7 +85,63 @@ pipeline {
       }
     }
 
-    stage('4 Ansible 部署云端') {
+    stage('4 构建前端并发布云端') {
+      environment {
+        // Jenkins 镜像内没有 Node：装到 jenkins_home 卷里，只首次下载，后续构建直接复用
+        NODE_VERSION = 'v22.22.2'
+        NODE_HOME    = '/var/jenkins_home/tools/node'
+        NPM_REGISTRY = 'https://registry.npmmirror.com'
+        FRONTEND_DIR = '/srv/prepilot_fastapi/frontend'
+        CLOUD_HOST   = '100.116.132.10'                  // 云端 Tailscale 内网 IP
+        CLOUD_DIR    = '/opt/prepilot_cloud/frontend_dist' // nginx 静态根目录(见 compose 挂载)
+        SSH_KEY      = '/var/jenkins_home/.ssh/id_ed25519'
+      }
+      steps {
+        sh '''
+          set -eo pipefail
+
+          # 1) 准备 Node 运行时
+          #    为什么不在 Jenkins 镜像里装:镜像重建成本高;为什么不 docker run node 镜像:
+          #    本机 docker daemon 拉不动 registry-1.docker.io(实测 Bad Gateway),故改用
+          #    npmmirror 二进制镜像下载官方 tarball,落地到持久卷 /var/jenkins_home/tools/node。
+          if [ ! -x "$NODE_HOME/bin/node" ]; then
+            echo ">>> 首次安装 Node $NODE_VERSION"
+            mkdir -p "$NODE_HOME"
+            curl -fsSL "https://registry.npmmirror.com/-/binary/node/$NODE_VERSION/node-$NODE_VERSION-linux-arm64.tar.gz" -o /tmp/node-$NODE_VERSION.tar.gz
+            tar -xzf /tmp/node-$NODE_VERSION.tar.gz -C "$NODE_HOME" --strip-components=1
+            rm -f /tmp/node-$NODE_VERSION.tar.gz
+          fi
+          export PATH="$NODE_HOME/bin:$PATH"
+          node -v && npm -v
+
+          # 2) 安装依赖并构建(npm cache 落在持久卷,二次构建明显变快)
+          cd "$FRONTEND_DIR"
+          npm ci --registry="$NPM_REGISTRY" --cache /var/jenkins_home/.npm < /dev/null
+          npm run build < /dev/null
+          # 容器内是 uid 1000,放宽权限,避免本机(uid 501)后续 npm 操作撞 EACCES
+          chmod -R a+rwX node_modules 2>/dev/null || true
+
+          # 3) 发布到云端:清空目录内容后 tar 灌入。以下几条都是踩过的坑,别改回去:
+          #    ① 不能 rm -rf 目录本身再 mkdir —— bind mount 按 inode 挂,目录一删一建,
+          #       nginx 容器里挂的还是旧 inode 的“空目录”,结果首页 403。用 find -mindepth 1
+          #       -delete 只清内容、保 inode。
+          #    ② 不能 rm -rf dir/* —— 星号匹配不到点文件,历史 ._* 垃圾会残留。
+          #    ③ 不用 scp -r —— scp 走 stdin 协议,在 Jenkins sh 步骤里易与 stdin 争用导致
+          #       静默中断(什么都没传、还返回 0)。tar 管道只打包 dist 内容,更稳更干净。
+          ssh -n -i "$SSH_KEY" -o StrictHostKeyChecking=no root@$CLOUD_HOST \\
+              "mkdir -p $CLOUD_DIR && find $CLOUD_DIR -mindepth 1 -delete"
+          tar -czf - -C ./dist . | ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no root@$CLOUD_HOST \\
+              "tar -xzf - -C $CLOUD_DIR"
+          #    ④ 末尾 restart 一次 nginx:若历史上有人 rm -rf 过整个目录,bind mount 会挂到旧
+          #       inode 的空目录上,nginx 永远看不到新文件(表现就是首页 403)。restart 会重新
+          #       解析挂载源,成本 1 秒,权当兜底。
+          ssh -n -i "$SSH_KEY" -o StrictHostKeyChecking=no root@$CLOUD_HOST \\
+              "docker restart prepilot-nginx >/dev/null && sleep 2; ls -1 $CLOUD_DIR; du -sh $CLOUD_DIR"
+        '''
+      }
+    }
+
+    stage('5 Ansible 部署云端') {
       steps {
         // 走 Tailscale 内网 100.116.132.10,用挂载的 SSH key 驱动 docker compose pull && up -d
         sh "ansible-playbook -i ${KIT_DIR}/ansible/inventory/hosts.yml " +
@@ -93,10 +149,12 @@ pipeline {
       }
     }
 
-    stage('5 云端公网冒烟') {
+    stage('6 云端公网冒烟') {
       steps {
         // 经 nginx(80)走完整链路:公网 /api/health -> nginx -> api:8000/health
         sh "curl -f http://182.254.244.139/api/health"
+        // 前端首页:nginx 静态目录 -> 确认 SPA 产物已随流水线发布
+        sh "curl -f http://182.254.244.139/ | grep -q 'id=\"root\"'"
       }
     }
   }
