@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.database import close_db, init_db
 from app.middleware.logging import RequestLogMiddleware
-from app.routers import admin, auth, health, me
+from app.routers import admin, auth, health, me, positions
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -55,11 +55,12 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestLogMiddleware)
 
-    # 统一挂到 /api 前缀：/api/health、/api/auth/*、/api/me/*、/api/admin/*
+    # 统一挂到 /api 前缀：/api/health、/api/auth/*、/api/me/*、/api/admin/*、/api/positions/*
     app.include_router(health.router, prefix=settings.API_PREFIX)
     app.include_router(auth.router, prefix=settings.API_PREFIX)
     app.include_router(me.router, prefix=settings.API_PREFIX)
     app.include_router(admin.router, prefix=settings.API_PREFIX)
+    app.include_router(positions.router, prefix=settings.API_PREFIX)
     return app
 
 

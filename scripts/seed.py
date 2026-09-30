@@ -27,7 +27,9 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models import Notification, NotificationSubscription, Role, RoleDataScope, User
+from app.models.position import JdVersion, Position, PositionRound
 from app.models.rbac import Permission, role_permissions
+from app.services.position import ROUND_DEFAULT_NAME
 from app.services.rbac import (
     PERMISSION_CATALOG,
     ROLE_DATA_SCOPES,
@@ -214,6 +216,133 @@ async def seed_subscriptions(db, users: dict[str, User]) -> None:
     await db.commit()
 
 
+# 演示职位（PRD 3.2）。字段顺序与 Position 模型一致：
+#   name, owner_email, status, jd(raw_text/hard_gates/competencies/bonuses), rounds[(type, interviewer_email)]
+POSITION_SEEDS = [
+    (
+        "中级后端工程师（Go/Python）",
+        "hr@prepilot.dev",
+        "open",
+        {
+            "raw_text": (
+                "岗位：中级后端工程师（Go/Python）\n"
+                "要求：本科及以上学历，计算机相关专业，3 年以上后端开发经验；"
+                "熟悉 Go 或 Python，熟悉至少一种主流 Web 框架；"
+                "熟悉 MySQL/PostgreSQL，具备 SQL 优化能力；"
+                "有微服务、消息队列（Kafka/RabbitMQ）实战经验。\n"
+                "加分项：Kubernetes / 云原生经验、高并发系统调优经验、开源社区贡献者。"
+            ),
+            "hard_gates": ["本科及以上学历，计算机相关专业", "3 年以上后端开发经验"],
+            "competencies": [
+                ("Go/Python 与主流 Web 框架", 40),
+                ("MySQL/PostgreSQL 与 SQL 优化", 35),
+                ("微服务与消息队列实战", 25),
+            ],
+            "bonuses": ["Kubernetes / 云原生经验", "高并发系统调优经验"],
+        },
+        [("r1", "interviewer@prepilot.dev"), ("r2", "interviewer2@prepilot.dev"),
+         ("hr", "hrlead@prepilot.dev"), ("offer", "hrlead@prepilot.dev")],
+    ),
+    (
+        "前端工程师（React）",
+        "hr2@prepilot.dev",
+        "closed",
+        {
+            "raw_text": (
+                "岗位：前端工程师（React）\n"
+                "要求：本科及以上，2 年以上前端经验；精通 React 与 TypeScript；"
+                "熟悉前端工程化（Vite/Webpack）与性能优化。\n"
+                "加分项：有可视化 / 编辑器类项目经验。"
+            ),
+            "hard_gates": ["本科及以上学历", "2 年以上前端开发经验"],
+            "competencies": [
+                ("React 与 TypeScript", 45),
+                ("前端工程化与构建", 30),
+                ("性能优化与排障", 25),
+            ],
+            "bonuses": ["可视化 / 编辑器项目经验"],
+        },
+        [("r1", "interviewer@prepilot.dev"), ("hr", "hrlead@prepilot.dev")],
+    ),
+    (
+        "数据平台工程师",
+        "hr@prepilot.dev",
+        "draft",
+        None,  # 草稿：JD 与流程都还没配，用于演示「草稿可删除」
+        [],
+    ),
+]
+
+
+async def seed_positions(db, users: dict[str, User]) -> int:
+    """幂等：按职位名定位，已存在则跳过（不覆盖人工编辑过的内容）。"""
+    from datetime import datetime, timezone
+
+    from app.services.position import jd_hash_of
+    from app.schemas.position import CompetencyIn
+
+    created = 0
+    for name, owner_email, status, jd, rounds in POSITION_SEEDS:
+        exists = await db.scalar(select(Position).where(Position.name == name))
+        if exists is not None:
+            continue
+
+        owner = users.get(owner_email)
+        position = Position(
+            name=name,
+            status=status,
+            owner_id=owner.id if owner else None,
+            closed_at=datetime.now(timezone.utc) if status == "closed" else None,
+        )
+        if jd is not None:
+            comps = [
+                {"id": f"c{i + 1}", "text": text, "weight": weight}
+                for i, (text, weight) in enumerate(jd["competencies"])
+            ]
+            position.jd_raw_text = jd["raw_text"]
+            position.jd_hard_gates = list(jd["hard_gates"])
+            position.jd_competencies = comps
+            position.jd_bonuses = list(jd["bonuses"])
+            position.jd_status = "confirmed"
+            position.jd_hash = jd_hash_of(
+                jd["hard_gates"],
+                [CompetencyIn(**c) for c in comps],
+                jd["bonuses"],
+            )
+        db.add(position)
+        await db.flush()
+
+        if jd is not None:
+            db.add(
+                JdVersion(
+                    position_id=position.id,
+                    version=1,
+                    snapshot_json={
+                        "hard_gates": position.jd_hard_gates,
+                        "competencies": position.jd_competencies,
+                        "bonuses": position.jd_bonuses,
+                    },
+                    change_summary="演示数据初始化",
+                    changed_by=owner.id if owner else None,
+                )
+            )
+
+        for seq, (rtype, email) in enumerate(rounds, start=1):
+            user = users.get(email)
+            db.add(
+                PositionRound(
+                    position_id=position.id,
+                    seq=seq,
+                    name=ROUND_DEFAULT_NAME.get(rtype, rtype),
+                    type=rtype,
+                    interviewer_id=user.id if user else None,
+                )
+            )
+        created += 1
+    await db.commit()
+    return created
+
+
 async def seed_notifications(db, users: dict[str, User]) -> None:
     for email, ntype, title, body in NOTIFICATION_SEEDS:
         user = users.get(email)
@@ -253,7 +382,9 @@ async def run() -> int:
             users = await seed_users(db, roles)
             await seed_subscriptions(db, users)
             await seed_notifications(db, users)
+            positions = await seed_positions(db, users)
             print(f"[ok] 测试用户 {len(users)} 个（统一密码：{DEFAULT_PASSWORD}）")
+            print(f"[ok] 演示职位 {positions} 个")
             for email, _, role_code in USER_SEEDS:
                 print(f"       {role_code:<12} {email}")
 

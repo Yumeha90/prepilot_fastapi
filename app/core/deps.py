@@ -8,10 +8,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionLocal
-from app.core.errors import ErrorCode, unauthorized
+from app.core.errors import ErrorCode, forbidden, unauthorized
 from app.core.security import decode_access_token
 from app.models.user import User
-from app.services.rbac import ensure_permission
+from app.services.rbac import ensure_permission, user_permissions
 
 # auto_error=False：由 get_current_user 自己返回 401，便于统一错误文案
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -64,6 +64,18 @@ def require_perm(code: str):
 
     async def _depend(user: User = Depends(get_current_user)) -> User:
         ensure_permission(user, code)
+        return user
+
+    return _depend
+
+
+def require_any_perm(*codes: str):
+    """任一权限命中即可：用于「view_all 或 view_assigned 都能进列表」这类场景。"""
+
+    async def _depend(user: User = Depends(get_current_user)) -> User:
+        perms = user_permissions(user)
+        if not perms & set(codes):
+            raise forbidden("无权限执行该操作")
         return user
 
     return _depend

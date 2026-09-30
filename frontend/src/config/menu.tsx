@@ -88,4 +88,4 @@ export const MENU_ITEMS: MenuItem[] = [
 ]
 
 /** 已实现的路由路径（其余走 Placeholder） */
-export const IMPLEMENTED_PATHS = new Set<string>(['/', '/system/roles'])
+export const IMPLEMENTED_PATHS = new Set<string>(['/', '/system/roles', '/positions'])

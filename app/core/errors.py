@@ -32,6 +32,16 @@ class ErrorCode:
     NOT_FOUND = "common.not_found"
     ROLE_NOT_FOUND = "auth.role_not_found"
 
+    # 职位与 JD（PRD 3.2）
+    POSITION_NOT_FOUND = "position.not_found"
+    POSITION_NOT_DELETABLE = "position.not_deletable"
+    POSITION_NAME_TAKEN = "position.name_taken"
+    POSITION_STATUS_INVALID = "position.status_invalid"
+    JD_INVALID = "position.jd_invalid"
+    ROUNDS_INVALID = "position.rounds_invalid"
+    PUBLISH_BLOCKED = "position.publish_blocked"
+    CLOSE_BLOCKED = "position.close_blocked"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""
