@@ -111,9 +111,9 @@ def summarize_jd_change(
         added = [x for x in n if x not in o]
         removed = [x for x in o if x not in n]
         if added:
-            parts.append(f"新增{label}{len(added)}项")
+            parts.append(f"新增{label} {len(added)}项")
         if removed:
-            parts.append(f"删除{label}{len(removed)}项")
+            parts.append(f"删除{label} {len(removed)}项")
 
     diff_items(
         "硬性门槛",
@@ -140,11 +140,11 @@ def summarize_jd_change(
         t for t in new_comps if t in old_comps and old_comps[t] != new_comps[t]
     ]
     if added:
-        parts.append(f"新增核心能力{len(added)}项")
+        parts.append(f"新增核心能力 {len(added)}项")
     if removed:
-        parts.append(f"删除核心能力{len(removed)}项")
+        parts.append(f"删除核心能力 {len(removed)}项")
     if reweighted:
-        parts.append(f"权重调整{len(reweighted)}项")
+        parts.append(f"权重调整 {len(reweighted)}项")
 
     if not parts:
         parts.append("JD 结构化调整")
