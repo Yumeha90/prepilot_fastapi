@@ -120,6 +120,28 @@ class Paged(BaseModel):
     page_size: int
 
 
+class SavePreviewIn(BaseModel):
+    """保存前的预检：把待保存的 JD 与轮次原样回传，由服务端判定影响。"""
+
+    jd: JdIn | None = None
+    rounds: list[RoundIn] = Field(default_factory=list)
+
+
+class SavePreviewOut(BaseModel):
+    """预检结果。前端据此决定是否弹二次确认。
+
+    - `jd_changed`：结构化摘要与库内不同 → 会 bump 版本，存量匹配分置为待重算
+    - `rounds_changed`：轮次顺序或人选有变 → 只对未来应聘记录生效
+    - 错误信息为空表示校验通过；非空时前端禁止保存并原样展示原因
+    """
+
+    jd_changed: bool = False
+    rounds_changed: bool = False
+    affected_candidates: int = 0
+    jd_error: str = ""
+    rounds_error: str = ""
+
+
 class ImpactOut(BaseModel):
     """保存前的「影响预览」：结构化变更会波及多少在流程候选人（本期恒为 0）。"""
 

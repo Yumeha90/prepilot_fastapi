@@ -152,7 +152,7 @@ async def _scenario_lifecycle() -> None:
         )
         assert jd.status_code == 200, jd.text
         assert jd.json()["status"] == "confirmed"
-        assert jd.json()["version"] == 2  # 首次确认：1 -> 2
+        assert jd.json()["version"] == 1  # 首次确认保持 v1，不额外 bump
 
         rounds = await client.put(
             f"/api/positions/{pid}/rounds",
@@ -246,3 +246,72 @@ async def _scenario_visibility() -> None:
 def test_interviewer_only_sees_assigned():
     """面试官数据范围 = assigned：只能看到自己被指派的职位。"""
     _run(_scenario_visibility())
+
+
+# ---------------------------------------------------------------- 编辑页支撑接口
+
+
+async def _scenario_form_support():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        hr = await _login(client)
+
+        # 面试官候选：既要能选到技术面试官，也要能选到 HR / HR 主管
+        # （evaluation:submit 只授予面试官角色，若只按它筛，HR 面与 Offer 轮将无人可选）
+        interview = await client.get("/api/users/options?purpose=interview", headers=hr)
+        assert interview.status_code == 200
+        roles = {u["role_code"] for u in interview.json()}
+        assert {"interviewer", "hr", "hr_lead"} <= roles
+
+        owner = await client.get("/api/users/options?purpose=owner", headers=hr)
+        assert owner.status_code == 200
+        assert all(u["role_code"] != "interviewer" for u in owner.json())
+
+        created = await client.post("/api/positions", json={"name": "pytest-表单支撑"}, headers=hr)
+        pid = created.json()["id"]
+
+        jd = {
+            "hard_gates": ["本科及以上"],
+            "competencies": [
+                {"text": "Go", "weight": 50},
+                {"text": "SQL", "weight": 30},
+                {"text": "微服务", "weight": 20},
+            ],
+            "bonuses": [],
+        }
+        rounds = [{"type": "r1", "interviewer_id": 7}, {"type": "hr", "interviewer_id": 3}]
+
+        # 首次保存：JD 与流程都算变更
+        first = await client.post(
+            f"/api/positions/{pid}/save-preview", headers=hr, json={"jd": jd, "rounds": rounds}
+        )
+        assert first.json()["jd_changed"] is True
+        assert first.json()["rounds_changed"] is True
+        assert first.json()["jd_error"] == ""
+        assert first.json()["rounds_error"] == ""
+
+        await client.put(f"/api/positions/{pid}/jd", headers=hr, json={**jd, "confirm": True})
+        await client.put(f"/api/positions/{pid}/rounds", headers=hr, json={"rounds": rounds})
+
+        # 原样再保存：不应再判定为变更
+        again = await client.post(
+            f"/api/positions/{pid}/save-preview", headers=hr, json={"jd": jd, "rounds": rounds}
+        )
+        assert again.json()["jd_changed"] is False
+        assert again.json()["rounds_changed"] is False
+
+        # 非法 JD（权重合计 90）与非法流程（末位不是 hr/offer）应被预检拦下
+        bad_jd = {**jd, "competencies": [{"text": "Go", "weight": 50}, {"text": "SQL", "weight": 30}, {"text": "MQ", "weight": 10}]}
+        bad = await client.post(
+            f"/api/positions/{pid}/save-preview",
+            headers=hr,
+            json={"jd": bad_jd, "rounds": [{"type": "r1", "interviewer_id": 7}]},
+        )
+        assert bad.json()["jd_error"]
+        assert bad.json()["rounds_error"]
+
+        await client.delete(f"/api/positions/{pid}", headers=hr)
+
+
+def test_position_form_support_apis():
+    """可选人员列表 + 保存前预检（编辑页依赖）。"""
+    _run(_scenario_form_support())

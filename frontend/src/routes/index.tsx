@@ -18,12 +18,15 @@ import ForgotPassword from '@/pages/ForgotPassword'
 import Forbidden from '@/pages/Forbidden'
 import NotFound from '@/pages/NotFound'
 import Placeholder from '@/pages/Placeholder'
+import PositionForm from '@/pages/PositionForm'
 import Positions from '@/pages/Positions'
 import Roles from '@/pages/Roles'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
   { path: 'positions', element: <Positions /> },
+  { path: 'positions/new', element: <PositionForm /> },
+  { path: 'positions/:id/edit', element: <PositionForm /> },
   { path: 'candidates', element: <Placeholder /> },
   { path: 'workbench', element: <Placeholder /> },
   { path: 'evaluations', element: <Placeholder /> },

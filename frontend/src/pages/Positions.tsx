@@ -1,37 +1,22 @@
 /**
- * P02 职位列表（PRD 3.2.1）。
+ * 职位与 JD 列表页（PRD 3.2.1）。
  *
- * 交互口径（2026-09-30 定）：
- * - 卡片视图：职位名 / 状态 / HR / JD 完成度 / 候选人数 / 最近更新
- * - 「复制」二次确认：明确告知面试官人选不会被复制（BR-24）
- * - 「关闭」二次确认：告知不会自动淘汰在流程候选人；非草稿**不可删除**
- * - 已关闭默认隐藏，可开关显示
+ * 交互口径（2026-09-30 改版）：
+ * - 表格视图：职位名 / 状态 / HR 负责人 / JD 状态 / 轮次 / 候选人 / 最近更新 / 操作
+ * - JD 状态直接显示「已确认 v1」这类文本，不再用进度条
+ * - 新建 / 编辑跳转到独立页面（/positions/new、/positions/:id/edit）
+ * - 复制 / 关闭 / 删除各自弹窗，标题与文案与操作一一对应；确定后执行并刷新列表
  */
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Badge,
-  Button,
-  Card,
-  Col,
-  Empty,
-  Input,
-  Modal,
-  Progress,
-  Row,
-  Select,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-  message,
-} from 'antd'
-import { AppstoreOutlined, CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import { Button, Card, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
+import { PlusOutlined } from '@ant-design/icons'
 
 import {
   closePosition,
-  createPosition,
   deletePosition,
   duplicatePosition,
   fetchPositions,
@@ -42,7 +27,7 @@ import {
 import { extractErrorCode } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 const STATUS_COLOR: Record<PositionStatus, string> = {
   draft: 'default',
@@ -51,8 +36,11 @@ const STATUS_COLOR: Record<PositionStatus, string> = {
   closed: 'default',
 }
 
+type ActionKind = 'duplicate' | 'close' | 'delete'
+
 export default function Positions() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const hasPerm = useAuthStore((s) => s.hasPerm)
   const canEdit = hasPerm('position:edit')
   const queryClient = useQueryClient()
@@ -60,9 +48,7 @@ export default function Positions() {
   const [status, setStatus] = useState<PositionStatus | undefined>(undefined)
   const [keyword, setKeyword] = useState('')
   const [includeClosed, setIncludeClosed] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [target, setTarget] = useState<PositionItem | null>(null)
+  const [pending, setPending] = useState<{ action: ActionKind; item: PositionItem } | null>(null)
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['positions', status, keyword, includeClosed],
@@ -70,63 +56,155 @@ export default function Positions() {
       fetchPositions({ status, keyword: keyword || undefined, include_closed: includeClosed }),
   })
 
-  const invalidate = () =>
+  const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['positions'] })
+  }
 
   const errMsg = (error: unknown, fallbackKey: string) =>
     t(`errors.${extractErrorCode(error)}`, { defaultValue: t(fallbackKey) })
 
-  const createMut = useMutation({
-    mutationFn: (name: string) => createPosition(name),
-    onSuccess: () => {
-      message.success(t('position.msg.created'))
-      setCreateOpen(false)
-      setNewName('')
-      invalidate()
-    },
-    onError: (e) => message.error(errMsg(e, 'common.error')),
-  })
+  const afterAction = (msgKey: string) => {
+    setPending(null)
+    refresh()
+    navigate('/positions')
+    message.success(t(msgKey))
+  }
 
   const dupMut = useMutation({
     mutationFn: (id: number) => duplicatePosition(id),
-    onSuccess: () => {
-      message.success(t('position.msg.duplicated'))
-      setTarget(null)
-      invalidate()
-    },
+    onSuccess: () => afterAction('position.msg.duplicated'),
     onError: (e) => message.error(errMsg(e, 'common.error')),
   })
 
   const closeMut = useMutation({
     mutationFn: (id: number) => closePosition(id),
-    onSuccess: () => {
-      message.success(t('position.msg.closed'))
-      setTarget(null)
-      invalidate()
-    },
+    onSuccess: () => afterAction('position.msg.closed'),
     onError: (e) => message.error(errMsg(e, 'common.error')),
   })
 
   const reopenMut = useMutation({
     mutationFn: (id: number) => reopenPosition(id),
     onSuccess: () => {
+      refresh()
       message.success(t('position.msg.reopened'))
-      invalidate()
     },
     onError: (e) => message.error(errMsg(e, 'common.error')),
   })
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => deletePosition(id),
-    onSuccess: () => {
-      message.success(t('position.msg.deleted'))
-      setTarget(null)
-      invalidate()
-    },
+    onSuccess: () => afterAction('position.msg.deleted'),
     onError: (e) => message.error(errMsg(e, 'position.deleteBlocked')),
   })
 
-  const items = useMemo(() => data?.items ?? [], [data])
+  const runPending = () => {
+    if (!pending) return
+    const id = pending.item.id
+    if (pending.action === 'duplicate') dupMut.mutate(id)
+    else if (pending.action === 'close') closeMut.mutate(id)
+    else deleteMut.mutate(id)
+  }
+
+  const dialogTitle = pending
+    ? t(
+        pending.action === 'duplicate'
+          ? 'position.duplicateTitle'
+          : pending.action === 'close'
+            ? 'position.closeTitle'
+            : 'position.deleteTitle',
+      )
+    : ''
+
+  const dialogBody = pending
+    ? t(
+        pending.action === 'duplicate'
+          ? 'position.duplicateHint'
+          : pending.action === 'close'
+            ? 'position.closeHint'
+            : 'position.deleteHint',
+      )
+    : ''
+
+  const columns: ColumnsType<PositionItem> = [
+    { title: t('position.name'), dataIndex: 'name', key: 'name' },
+    {
+      title: t('position.filterStatus'),
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (v: PositionStatus) => (
+        <Tag color={STATUS_COLOR[v]}>{t(`position.status.${v}`)}</Tag>
+      ),
+    },
+    {
+      title: t('position.owner'),
+      dataIndex: 'owner_name',
+      key: 'owner_name',
+      width: 120,
+      render: (v: string) => v || '-',
+    },
+    {
+      title: t('position.jdColumn'),
+      key: 'jd',
+      width: 130,
+      render: (_, row) => {
+        if (row.jd_status === 'confirmed') {
+          return <Tag color="success">{`${t('position.jdStatus.confirmed')} v${row.jd_version}`}</Tag>
+        }
+        return <Tag>{t(`position.jdStatus.${row.jd_status}`)}</Tag>
+      },
+    },
+    { title: t('position.roundCount'), dataIndex: 'round_count', key: 'round_count', width: 80 },
+    {
+      title: t('position.candidateCount'),
+      dataIndex: 'candidate_count',
+      key: 'candidate_count',
+      width: 90,
+    },
+    {
+      title: t('position.updatedAt'),
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 170,
+      render: (v: string) => new Date(v).toLocaleString(),
+    },
+  ]
+
+  if (canEdit) {
+    columns.push({
+      title: t('position.actions'),
+      key: 'actions',
+      width: 220,
+      render: (_, row) => (
+        <Space size={4} wrap>
+          <Button type="link" size="small" onClick={() => navigate(`/positions/${row.id}/edit`)}>
+            {t('position.action.edit')}
+          </Button>
+          <Button type="link" size="small" onClick={() => setPending({ action: 'duplicate', item: row })}>
+            {t('position.action.duplicate')}
+          </Button>
+          {row.status === 'closed' ? (
+            <Button type="link" size="small" onClick={() => reopenMut.mutate(row.id)}>
+              {t('position.action.reopen')}
+            </Button>
+          ) : (
+            <Button type="link" size="small" onClick={() => setPending({ action: 'close', item: row })}>
+              {t('position.action.close')}
+            </Button>
+          )}
+          <Button
+            type="link"
+            size="small"
+            danger
+            disabled={row.status !== 'draft'}
+            onClick={() => setPending({ action: 'delete', item: row })}
+          >
+            {t('position.action.delete')}
+          </Button>
+        </Space>
+      ),
+    })
+  }
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -161,188 +239,43 @@ export default function Positions() {
             <Switch checked={includeClosed} onChange={setIncludeClosed} />
           </Space>
           {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/positions/new')}>
               {t('position.new')}
             </Button>
           )}
         </Space>
       </Card>
 
-      {isError ? (
-        <Card>
-          <Empty description={t('common.error')}>
+      <Card>
+        {isError ? (
+          <Space direction="vertical">
+            <Text type="danger">{t('common.error')}</Text>
             <Button onClick={() => refetch()}>{t('common.retry')}</Button>
-          </Empty>
-        </Card>
-      ) : (
-        <Row gutter={[16, 16]}>
-          {items.map((p) => (
-            <Col key={p.id} xs={24} sm={12} lg={8} xl={6}>
-              <Card
-                size="small"
-                loading={isLoading}
-                title={
-                  <Space size="small">
-                    <AppstoreOutlined />
-                    <span>{p.name}</span>
-                  </Space>
-                }
-                extra={<Tag color={STATUS_COLOR[p.status]}>{t(`position.status.${p.status}`)}</Tag>}
-                actions={
-                  canEdit
-                    ? [
-                        <Button
-                          key="dup"
-                          type="link"
-                          size="small"
-                          icon={<CopyOutlined />}
-                          onClick={() => setTarget(p)}
-                        >
-                          {t('position.action.duplicate')}
-                        </Button>,
-                        p.status === 'closed' ? (
-                          <Button
-                            key="reopen"
-                            type="link"
-                            size="small"
-                            onClick={() => reopenMut.mutate(p.id)}
-                          >
-                            {t('position.action.reopen')}
-                          </Button>
-                        ) : (
-                          <Button
-                            key="close"
-                            type="link"
-                            size="small"
-                            onClick={() => setTarget(p)}
-                          >
-                            {t('position.action.close')}
-                          </Button>
-                        ),
-                        <Button
-                          key="del"
-                          type="link"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          disabled={p.status !== 'draft'}
-                          onClick={() => setTarget(p)}
-                        >
-                          {t('position.action.delete')}
-                        </Button>,
-                      ]
-                    : undefined
-                }
-              >
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {t('position.owner')}：{p.owner_name || '-'}
-                  </Text>
-                  <Space size="small" wrap>
-                    <Badge
-                      status={p.jd_status === 'confirmed' ? 'success' : 'default'}
-                      text={t(`position.jdStatus.${p.jd_status}`)}
-                    />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      v{p.jd_version}
-                    </Text>
-                  </Space>
-                  <Progress
-                    percent={p.jd_completion}
-                    size="small"
-                    status={p.jd_completion === 100 ? 'success' : 'active'}
-                  />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {t('position.roundCount')} {p.round_count} · {t('position.candidateCount')}{' '}
-                    {p.candidate_count}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {t('position.updatedAt')}：{new Date(p.updated_at).toLocaleString()}
-                  </Text>
-                </Space>
-              </Card>
-            </Col>
-          ))}
-          {!isLoading && items.length === 0 && (
-            <Col span={24}>
-              <Card>
-                <Empty description={t('common.loading')} />
-              </Card>
-            </Col>
-          )}
-        </Row>
-      )}
+          </Space>
+        ) : (
+          <Table<PositionItem>
+            rowKey="id"
+            loading={isLoading}
+            columns={columns}
+            dataSource={data?.items ?? []}
+            pagination={false}
+            locale={{ emptyText: t('common.noData') }}
+          />
+        )}
+      </Card>
 
       <Modal
-        open={createOpen}
-        title={t('position.new')}
+        open={pending !== null}
+        title={dialogTitle}
         okText={t('common.ok')}
         cancelText={t('common.cancel')}
-        confirmLoading={createMut.isPending}
-        okButtonProps={{ disabled: !newName.trim() }}
-        onCancel={() => setCreateOpen(false)}
-        onOk={() => createMut.mutate(newName.trim())}
-      >
-        <Input
-          placeholder={t('position.namePlaceholder')}
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-      </Modal>
-
-      {/* 复制 / 关闭 / 删除 共用一个确认弹窗，按当前职位状态决定语义 */}
-      <Modal
-        open={target !== null}
-        title={
-          target?.status === 'draft' ? t('position.duplicateTitle') : t('position.duplicateTitle')
-        }
-        okText={t('common.ok')}
-        cancelText={t('common.cancel')}
-        onCancel={() => setTarget(null)}
-        footer={[
-          <Button key="cancel" onClick={() => setTarget(null)}>
-            {t('common.cancel')}
-          </Button>,
-          <Button
-            key="dup"
-            type="primary"
-            icon={<CopyOutlined />}
-            loading={dupMut.isPending}
-            onClick={() => target && dupMut.mutate(target.id)}
-          >
-            {t('position.action.duplicate')}
-          </Button>,
-          target && target.status !== 'closed' ? (
-            <Button
-              key="close"
-              loading={closeMut.isPending}
-              onClick={() => closeMut.mutate(target.id)}
-            >
-              {t('position.action.close')}
-            </Button>
-          ) : null,
-          target?.status === 'draft' ? (
-            <Button
-              key="del"
-              danger
-              icon={<DeleteOutlined />}
-              loading={deleteMut.isPending}
-              onClick={() => deleteMut.mutate(target.id)}
-            >
-              {t('position.action.delete')}
-            </Button>
-          ) : null,
-        ]}
+        confirmLoading={dupMut.isPending || closeMut.isPending || deleteMut.isPending}
+        onCancel={() => setPending(null)}
+        onOk={runPending}
       >
         <Space direction="vertical" size="small">
-          <Text strong>{target?.name}</Text>
-          <Paragraph style={{ marginBottom: 0 }}>{t('position.duplicateHint')}</Paragraph>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {t('position.closeHint')}
-          </Paragraph>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {t('position.roundFlowHint')}
-          </Paragraph>
+          <Text strong>{pending?.item.name}</Text>
+          <Text>{dialogBody}</Text>
         </Space>
       </Modal>
     </Space>

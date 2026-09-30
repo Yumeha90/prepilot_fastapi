@@ -48,3 +48,12 @@ class MeResponse(BaseModel):
     permissions: list[str]
     scopes: dict[str, str]
     unread_count: int
+
+
+class UserOption(BaseModel):
+    """下拉用的人员选项（职位负责人 / 轮次面试官）。"""
+
+    id: int
+    name: str = ""
+    email: str = ""
+    role_code: str = ""

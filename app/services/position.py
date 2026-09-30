@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ErrorCode, bad_request, forbidden, not_found
+from app.core.errors import AppError, ErrorCode, bad_request, forbidden, not_found
 from app.models.position import JdVersion, Position, PositionRound
 from app.models.user import User
-from app.schemas.position import CompetencyIn, RoundIn
+from app.schemas.position import CompetencyIn, JdIn, RoundIn
 
 # 轮次类型与上限（BR-23）
 ROUND_TYPES = ("r1", "r2", "hr", "offer")
@@ -304,6 +304,9 @@ async def save_jd(
     comps_in = [CompetencyIn(**c) for c in comps_raw]
     validate_jd(gates, comps_in)
 
+    # had_hash 必须在覆写 jd_hash 之前取：库里没有摘要说明是**首次确认**，
+    # 此时应保持 jd_version = 1 而不是 +1（否则列表会显示「已确认 v2」但只确认过一次）。
+    had_hash = bool(position.jd_hash)
     new_hash = jd_hash_of(gates, comps_in, bonus)
     changed = new_hash != position.jd_hash
 
@@ -315,8 +318,9 @@ async def save_jd(
     position.jd_status = "confirmed"
 
     if changed:
-        position.jd_version = int(position.jd_version) + 1
         position.jd_hash = new_hash
+        if had_hash:
+            position.jd_version = int(position.jd_version) + 1
         db.add(
             JdVersion(
                 position_id=position.id,
@@ -326,7 +330,7 @@ async def save_jd(
                     "competencies": comps_raw,
                     "bonuses": bonus,
                 },
-                change_summary="JD 结构化变更" if position.jd_hash else "JD 首次确认",
+                change_summary="JD 结构化变更" if had_hash else "JD 首次确认",
                 changed_by=user.id,
             )
         )
@@ -388,6 +392,53 @@ async def duplicate_position(db: AsyncSession, position: Position, user: User) -
     await db.commit()
     await db.refresh(copy)
     return copy
+
+
+async def preview_save(
+    db: AsyncSession, position: Position, jd: JdIn | None, rounds: list[RoundIn]
+) -> dict:
+    """保存前预检：判定 JD / 轮次是否实质变更，并顺带做一次校验。
+
+    与真正保存走同一套规范化与校验，避免「前端判一遍、后端判一遍」结果不一致。
+    """
+    jd_changed = False
+    jd_error = ""
+
+    if jd is not None:
+        gates = normalize_items(jd.hard_gates, "hard_gate")
+        comps_raw = normalize_competencies(jd.competencies)
+        bonus = normalize_bonuses(jd.bonuses)
+        try:
+            validate_jd(gates, [CompetencyIn(**c) for c in comps_raw])
+        except AppError as exc:
+            jd_error = str(exc.detail.get("message", ""))
+        else:
+            jd_changed = (
+                jd_hash_of(gates, [CompetencyIn(**c) for c in comps_raw], bonus)
+                != position.jd_hash
+            )
+
+    rounds_error = ""
+    rounds_changed = False
+    try:
+        validate_rounds(rounds)
+    except AppError as exc:
+        rounds_error = str(exc.detail.get("message", ""))
+    else:
+        current = [
+            (r.type, r.interviewer_id)
+            for r in sorted(position.rounds, key=lambda x: x.seq)
+        ]
+        incoming = [(r.type, r.interviewer_id) for r in rounds]
+        rounds_changed = current != incoming
+
+    return {
+        "jd_changed": jd_changed,
+        "rounds_changed": rounds_changed,
+        "affected_candidates": await count_active_candidates(db, position.id),
+        "jd_error": jd_error,
+        "rounds_error": rounds_error,
+    }
 
 
 async def can_delete(db: AsyncSession, position: Position) -> tuple[bool, str]:

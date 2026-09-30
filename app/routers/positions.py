@@ -25,6 +25,8 @@ from app.schemas.position import (
     PositionUpdateIn,
     RoundOut,
     RoundsSaveIn,
+    SavePreviewIn,
+    SavePreviewOut,
 )
 from app.services import position as svc
 from app.services.rbac import user_data_scopes, user_permissions
@@ -260,6 +262,22 @@ async def save_jd(
         user,
     )
     return _jd_out(updated)
+
+
+@router.post("/{position_id}/save-preview", response_model=SavePreviewOut)
+async def save_preview(
+    position_id: int,
+    payload: SavePreviewIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_perm("position:edit")),
+) -> SavePreviewOut:
+    """保存前预检：JD 是否会 bump 版本、轮次是否变更、波及多少在流程候选人。
+
+    前端据此决定要不要弹二次确认；真正保存仍会再校验一次（不信任前端）。
+    """
+    position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
+    return SavePreviewOut(**await svc.preview_save(db, position, payload.jd, payload.rounds))
 
 
 @router.get("/{position_id}/jd/impact", response_model=ImpactOut)
