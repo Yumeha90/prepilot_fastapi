@@ -115,6 +115,8 @@ export default {
     ownerPlaceholder: '请选择 HR 负责人',
     filterStatus: '状态',
     allStatus: '全部状态',
+    allOwners: '全部负责人',
+    pageTotal: '第 {{from}}-{{to}} 条 / 共 {{total}} 条',
     keyword: '关键字',
     keywordPlaceholder: '按职位名搜索',
     showClosed: '显示已关闭',

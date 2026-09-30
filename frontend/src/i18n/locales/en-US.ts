@@ -119,6 +119,8 @@ export default {
     ownerPlaceholder: 'Select HR owner',
     filterStatus: 'Status',
     allStatus: 'All statuses',
+    allOwners: 'All owners',
+    pageTotal: '{{from}}-{{to}} of {{total}}',
     keyword: 'Keyword',
     keywordPlaceholder: 'Search by name',
     showClosed: 'Show closed',

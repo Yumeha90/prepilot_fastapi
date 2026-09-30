@@ -65,6 +65,7 @@ export interface ListParams {
   status?: PositionStatus
   keyword?: string
   include_closed?: boolean
+  owner_id?: number
   page?: number
   page_size?: number
 }

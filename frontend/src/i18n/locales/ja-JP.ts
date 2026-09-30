@@ -118,6 +118,8 @@ export default {
     ownerPlaceholder: '担当 HR を選択',
     filterStatus: 'ステータス',
     allStatus: 'すべて',
+    allOwners: '全担当者',
+    pageTotal: '{{total}} 件中 {{from}}-{{to}} 件',
     keyword: 'キーワード',
     keywordPlaceholder: '名前で検索',
     showClosed: '終了済みを表示',

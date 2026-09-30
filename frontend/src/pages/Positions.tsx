@@ -6,6 +6,8 @@
  * - JD 状态直接显示「已确认 v1」这类文本，不再用进度条
  * - 新建 / 编辑跳转到独立页面（/positions/new、/positions/:id/edit）
  * - 复制 / 关闭 / 删除各自弹窗，标题与文案与操作一一对应；确定后执行并刷新列表
+ * - 筛选四件套：关键字 / 状态 / HR 负责人 / 显示已关闭；默认按最近更新倒序
+ * - 分页与筛选条件变化一律回到第 1 页，避免「翻到第 3 页后筛选只剩 2 条」的空列表
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -27,6 +29,7 @@ import {
   type PositionItem,
   type PositionStatus,
 } from '@/api/positions'
+import { fetchUserOptions } from '@/api/users'
 import { extractErrorCode } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 
@@ -51,13 +54,34 @@ export default function Positions() {
   const [status, setStatus] = useState<PositionStatus | undefined>(undefined)
   const [keyword, setKeyword] = useState('')
   const [includeClosed, setIncludeClosed] = useState(false)
+  const [ownerId, setOwnerId] = useState<number | undefined>(undefined)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [pending, setPending] = useState<{ action: ActionKind; item: PositionItem } | null>(null)
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['positions', status, keyword, includeClosed],
-    queryFn: () =>
-      fetchPositions({ status, keyword: keyword || undefined, include_closed: includeClosed }),
+  const { data: ownerOptions = [] } = useQuery({
+    queryKey: ['user-options', 'owner'],
+    queryFn: () => fetchUserOptions('owner'),
   })
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['positions', status, keyword, includeClosed, ownerId, page, pageSize],
+    queryFn: () =>
+      fetchPositions({
+        status,
+        keyword: keyword || undefined,
+        include_closed: includeClosed,
+        owner_id: ownerId,
+        page,
+        page_size: pageSize,
+      }),
+  })
+
+  // 任何筛选条件变化都回到第 1 页：否则在第 3 页加个筛选会看到空列表
+  const resetPage = <T,>(setter: (v: T) => void) => (v: T) => {
+    setter(v)
+    setPage(1)
+  }
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['positions'] })
@@ -68,6 +92,7 @@ export default function Positions() {
 
   const afterAction = (msgKey: string) => {
     setPending(null)
+    setPage(1)
     refresh()
     navigate('/positions')
     message.success(t(msgKey))
@@ -267,7 +292,9 @@ export default function Positions() {
               allowClear
               placeholder={t('position.keywordPlaceholder')}
               style={{ width: 220 }}
-              onSearch={(v) => setKeyword(v.trim())}
+              onSearch={(v) => {
+                resetPage(setKeyword)(v.trim())
+              }}
             />
           </Space>
           <Space size="small">
@@ -275,7 +302,7 @@ export default function Positions() {
             <Select<PositionStatus | 'all'>
               value={status ?? 'all'}
               style={{ width: 140 }}
-              onChange={(v) => setStatus(v === 'all' ? undefined : v)}
+              onChange={resetPage((v) => setStatus(v === 'all' ? undefined : v))}
               options={[
                 { value: 'all', label: t('position.allStatus') },
                 { value: 'draft', label: t('position.status.draft') },
@@ -286,8 +313,20 @@ export default function Positions() {
             />
           </Space>
           <Space size="small">
+            <Text type="secondary">{t('position.owner')}</Text>
+            <Select<number | 'all'>
+              value={ownerId ?? 'all'}
+              style={{ width: 160 }}
+              onChange={resetPage((v) => setOwnerId(v === 'all' ? undefined : v))}
+              options={[
+                { value: 'all' as const, label: t('position.allOwners') },
+                ...ownerOptions.map((o) => ({ value: o.id, label: o.name })),
+              ]}
+            />
+          </Space>
+          <Space size="small">
             <Text type="secondary">{t('position.showClosed')}</Text>
-            <Switch checked={includeClosed} onChange={setIncludeClosed} />
+            <Switch checked={includeClosed} onChange={resetPage(setIncludeClosed)} />
           </Space>
           {canEdit && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/positions/new')}>
@@ -309,8 +348,20 @@ export default function Positions() {
             loading={isLoading}
             columns={columns}
             dataSource={data?.items ?? []}
-            pagination={false}
             locale={{ emptyText: t('common.noData') }}
+            pagination={{
+              current: page,
+              pageSize,
+              total: data?.total ?? 0,
+              showSizeChanger: true,
+              pageSizeOptions: [10, 20, 50],
+              showTotal: (total, range) =>
+                t('position.pageTotal', { from: range[0], to: range[1], total }),
+              onChange: (p, ps) => {
+                setPage(p)
+                setPageSize(ps)
+              },
+            }}
           />
         )}
       </Card>
