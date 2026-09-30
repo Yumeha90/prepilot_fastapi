@@ -22,25 +22,20 @@ import {
   Card,
   Col,
   Divider,
-  Drawer,
   Input,
-  List,
   Modal,
   Row,
   Select,
   Slider,
   Space,
-  Tag,
   Typography,
   Upload,
   message,
 } from 'antd'
 import {
   ArrowDownOutlined,
-  ArrowLeftOutlined,
   ArrowUpOutlined,
   DeleteOutlined,
-  HistoryOutlined,
   PlusOutlined,
   ThunderboltOutlined,
   UploadOutlined,
@@ -49,8 +44,6 @@ import { extractJdText, parseJd } from '@/api/jd'
 
 import {
   createPosition,
-  fetchJdVersion,
-  fetchJdVersions,
   fetchPosition,
   previewSave,
   saveJd,
@@ -113,8 +106,6 @@ export default function PositionForm() {
   const [extracting, setExtracting] = useState(false)
   const [parsing, setParsing] = useState(false)
   const [parseNotice, setParseNotice] = useState('')
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [pickedVersion, setPickedVersion] = useState<number | null>(null)
 
   const { data: detail } = useQuery({
     queryKey: ['position', positionId],
@@ -130,19 +121,6 @@ export default function PositionForm() {
   const { data: owners = [] } = useQuery({
     queryKey: ['user-options', 'owner'],
     queryFn: () => fetchUserOptions('owner'),
-  })
-
-  // JD 版本历史：抽屉打开才拉列表，选中某版才拉快照（P18 回溯「按哪版标准算的分」）
-  const { data: versions = [] } = useQuery({
-    queryKey: ['jd-versions', positionId],
-    queryFn: () => fetchJdVersions(positionId as number),
-    enabled: isEdit && historyOpen,
-  })
-
-  const { data: pickedDetail } = useQuery({
-    queryKey: ['jd-version', positionId, pickedVersion],
-    queryFn: () => fetchJdVersion(positionId as number, pickedVersion as number),
-    enabled: isEdit && pickedVersion !== null,
   })
 
   useEffect(() => {
@@ -315,17 +293,6 @@ export default function PositionForm() {
             {t(isEdit ? 'position.editTitle' : 'position.newTitle')}
           </Title>
           <Space>
-            {isEdit && (
-              <Button
-                icon={<HistoryOutlined />}
-                onClick={() => {
-                  setPickedVersion(null)
-                  setHistoryOpen(true)
-                }}
-              >
-                {t('position.versionHistory')}
-              </Button>
-            )}
             <Button onClick={() => navigate('/positions')}>{t('position.backToList')}</Button>
           </Space>
         </Space>
@@ -670,106 +637,6 @@ export default function PositionForm() {
           {changeInfo?.rounds_changed && <Text>{t('position.roundChangeHint')}</Text>}
         </Space>
       </Modal>
-
-      <Drawer
-        width={720}
-        open={historyOpen}
-        title={
-          pickedVersion === null
-            ? t('position.versionHistory')
-            : t('position.versionSnapshotTitle', { v: pickedVersion })
-        }
-        onClose={() => setHistoryOpen(false)}
-      >
-        {pickedVersion === null ? (
-          versions.length === 0 ? (
-            <Text type="secondary">{t('position.noVersions')}</Text>
-          ) : (
-            <List
-              dataSource={versions}
-              rowKey="version"
-              renderItem={(v) => (
-                <List.Item
-                  actions={[
-                    <Button
-                      key="view"
-                      type="link"
-                      size="small"
-                      onClick={() => setPickedVersion(v.version)}
-                    >
-                      {t('position.viewVersion')}
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Space size={6} wrap>
-                        <Tag color="blue">{`v${v.version}`}</Tag>
-                        <Text>{v.change_summary || '-'}</Text>
-                      </Space>
-                    }
-                    description={
-                      <Text type="secondary">
-                        {`${v.changed_by_name || '-'} · ${new Date(v.created_at).toLocaleString()}`}
-                      </Text>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          )
-        ) : (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Button
-              size="small"
-              icon={<ArrowLeftOutlined />}
-              onClick={() => setPickedVersion(null)}
-            >
-              {t('position.backToVersionList')}
-            </Button>
-            {pickedDetail ? (
-              <>
-                <Text type="secondary">
-                  {`${pickedDetail.change_summary} · ${pickedDetail.changed_by_name || '-'} · ${new Date(
-                    pickedDetail.created_at,
-                  ).toLocaleString()}`}
-                </Text>
-                <Divider orientation="left" style={{ margin: 0 }}>
-                  {t('position.form.hardGates')}
-                </Divider>
-                {pickedDetail.hard_gates.length ? (
-                  pickedDetail.hard_gates.map((x, i) => <div key={`g-${i}`}>{x}</div>)
-                ) : (
-                  <Text type="secondary">{t('position.form.emptyHint')}</Text>
-                )}
-                <Divider orientation="left" style={{ margin: 0 }}>
-                  {t('position.form.competencies')}
-                </Divider>
-                {pickedDetail.competencies.length ? (
-                  pickedDetail.competencies.map((c, i) => (
-                    <Space key={`c-${i}`}>
-                      <Text>{c.text}</Text>
-                      <Tag>{`${t('position.form.weight')} ${c.weight}`}</Tag>
-                    </Space>
-                  ))
-                ) : (
-                  <Text type="secondary">{t('position.form.emptyHint')}</Text>
-                )}
-                <Divider orientation="left" style={{ margin: 0 }}>
-                  {t('position.form.bonuses')}
-                </Divider>
-                {pickedDetail.bonuses.length ? (
-                  pickedDetail.bonuses.map((x, i) => <div key={`b-${i}`}>{x}</div>)
-                ) : (
-                  <Text type="secondary">{t('position.form.emptyHint')}</Text>
-                )}
-              </>
-            ) : (
-              <Text type="secondary">{t('common.loading')}</Text>
-            )}
-          </Space>
-        )}
-      </Drawer>
     </Space>
   )
 }

@@ -148,11 +148,6 @@ export default {
       'A closed position stops receiving new candidates and is hidden from the list by default — tick "Show closed" to see it again. Closing does not reject candidates in progress; settle them on the board first. Closed positions are kept for 1 year and can be reopened.',
     deleteTitle: 'Delete position',
     deleteHint: 'This draft position will be permanently deleted.',
-    versionHistory: 'JD version history',
-    versionSnapshotTitle: 'JD snapshot of v{{v}}',
-    viewVersion: 'View',
-    backToVersionList: 'Back to versions',
-    noVersions: 'No versions yet — one is created when the JD is confirmed',
     deleteBlocked: 'Only draft positions can be deleted; use "Close" instead',
     changeTitle: 'Save changes',
     jdChangeWithCandidates:
