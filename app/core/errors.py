@@ -49,6 +49,20 @@ class ErrorCode:
     JD_TEXT_TOO_SHORT = "position.jd_text_too_short"
     LLM_FAILED = "common.llm_failed"
 
+    # 候选人与简历（PRD 3.3）
+    CANDIDATE_NOT_FOUND = "candidate.not_found"
+    CANDIDATE_EMAIL_TAKEN = "candidate.email_taken"
+    CANDIDATE_ALREADY_APPLIED = "candidate.already_applied"
+    CANDIDATE_AUTH_REQUIRED = "candidate.auth_required"
+    CANDIDATE_JD_NOT_CONFIRMED = "candidate.jd_not_confirmed"
+    CANDIDATE_NOT_CONFIRMED = "candidate.not_confirmed"
+    CANDIDATE_ALREADY_CONFIRMED = "candidate.already_confirmed"
+    RESUME_FILE_TOO_LARGE = "candidate.resume_file_too_large"
+    RESUME_FILE_UNSUPPORTED = "candidate.resume_file_unsupported"
+    RESUME_FILE_NO_TEXT = "candidate.resume_file_no_text"
+    RESUME_TEXT_TOO_SHORT = "candidate.resume_text_too_short"
+    RESUME_TOO_LONG = "candidate.resume_too_long"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

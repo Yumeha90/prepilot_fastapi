@@ -21,13 +21,19 @@ import Placeholder from '@/pages/Placeholder'
 import PositionForm from '@/pages/PositionForm'
 import Positions from '@/pages/Positions'
 import Roles from '@/pages/Roles'
+import Candidates from '@/pages/Candidates'
+import CandidateUpload from '@/pages/CandidateUpload'
+import CandidateParse from '@/pages/CandidateParse'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
   { path: 'positions', element: <Positions /> },
   { path: 'positions/new', element: <PositionForm /> },
   { path: 'positions/:id/edit', element: <PositionForm /> },
-  { path: 'candidates', element: <Placeholder /> },
+  // 3.3 候选人：列表 / 上传（P04）/ 解析确认（P05）
+  { path: 'candidates', element: <Candidates /> },
+  { path: 'candidates/new', element: <CandidateUpload /> },
+  { path: 'candidates/:id/parse', element: <CandidateParse /> },
   { path: 'workbench', element: <Placeholder /> },
   { path: 'evaluations', element: <Placeholder /> },
   { path: 'matches', element: <Placeholder /> },

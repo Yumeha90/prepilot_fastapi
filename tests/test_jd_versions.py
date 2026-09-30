@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from app.core.database import SessionLocal, engine
 from app.main import app
+from app.models.candidate import Candidate
 from app.models.match_score import CURRENT, STALE, MatchScore
 
 
@@ -144,12 +145,27 @@ async def _scenario_stale() -> None:
             f"/api/positions/{pid}/jd", json={**JD_V1, "confirm": True}, headers=headers
         )
 
-        # 造两条「当前有效」的匹配分（3.3 之前没有候选人表，直接插）
+        # 造两条「当前有效」的匹配分。
+        # ⚠️ 005 迁移后 match_scores.candidate_id 有了 candidates 外键，
+        #    不能再随便填 901/902 这种不存在的 id，必须先建真候选人。
+        import uuid
+
+        suffix = uuid.uuid4().hex[:8]
         async with SessionLocal() as db:
-            for cid in (901, 902):
+            cands = []
+            for i in range(2):
+                c = Candidate(
+                    name=f"pytest-候选人{i}",
+                    contact_email=f"stale-{suffix}-{i}@example.com",
+                    profile_status="confirmed",
+                )
+                db.add(c)
+                cands.append(c)
+            await db.flush()
+            for c in cands:
                 db.add(
                     MatchScore(
-                        candidate_id=cid,
+                        candidate_id=c.id,
                         position_id=pid,
                         jd_version=1,
                         score=78.5,
@@ -160,6 +176,7 @@ async def _scenario_stale() -> None:
                     )
                 )
             await db.commit()
+            cand_ids = [c.id for c in cands]
 
         # 预检：影响面 = 2 条
         pv = await client.post(
@@ -204,6 +221,7 @@ async def _scenario_stale() -> None:
 
         async with SessionLocal() as db:
             await db.execute(delete(MatchScore).where(MatchScore.position_id == pid))
+            await db.execute(delete(Candidate).where(Candidate.id.in_(cand_ids)))
             await db.commit()
         await client.delete(f"/api/positions/{pid}", headers=headers)
 

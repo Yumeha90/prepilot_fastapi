@@ -27,10 +27,10 @@ _UNSUPPORTED = "不支持的文件类型，仅支持文本型 PDF、DOCX、TXT�
 _NO_TEXT = "该文件无可提取文本，请改用文本型 PDF 或手动粘贴纯文本"
 
 
-def _ext_of(filename: str) -> str:
+def _ext_of(filename: str, unsupported: str = ErrorCode.JD_FILE_UNSUPPORTED) -> str:
     ext = PurePosixPath(filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
-        raise bad_request(ErrorCode.JD_FILE_UNSUPPORTED, _UNSUPPORTED)
+        raise bad_request(unsupported, _UNSUPPORTED)
     return ext
 
 
@@ -82,20 +82,45 @@ def _from_plain(data: bytes) -> str:
     return data.decode("utf-8", errors="ignore")
 
 
-async def extract_text_async(filename: str, data: bytes) -> str:
-    """在线程池里跑同步抽取：pdfplumber / python-docx 都是阻塞库，别堵事件循环。"""
-    return await asyncio.to_thread(extract_text, filename, data)
+async def extract_text_async(
+    filename: str,
+    data: bytes,
+    *,
+    too_large: str = ErrorCode.JD_FILE_TOO_LARGE,
+    unsupported: str = ErrorCode.JD_FILE_UNSUPPORTED,
+    no_text: str = ErrorCode.JD_FILE_NO_TEXT,
+) -> str:
+    """在线程池里跑同步抽取：pdfplumber / python-docx 都是阻塞库，别堵事件循环。
+
+    错误码可覆盖：简历（3.3）复用同一套抽取逻辑，但要报 `candidate.resume_*`，
+    否则前端三语映射会指到职位那一类文案上。
+    """
+    return await asyncio.to_thread(
+        extract_text,
+        filename,
+        data,
+        too_large=too_large,
+        unsupported=unsupported,
+        no_text=no_text,
+    )
 
 
-def extract_text(filename: str, data: bytes) -> str:
+def extract_text(
+    filename: str,
+    data: bytes,
+    *,
+    too_large: str = ErrorCode.JD_FILE_TOO_LARGE,
+    unsupported: str = ErrorCode.JD_FILE_UNSUPPORTED,
+    no_text: str = ErrorCode.JD_FILE_NO_TEXT,
+) -> str:
     """同步抽取纯文本。失败（不支持 / 过大 / 无文本层）一律抛 400。"""
-    ext = _ext_of(filename)
+    ext = _ext_of(filename, unsupported)
     if len(data) > MAX_BYTES:
-        raise bad_request(ErrorCode.JD_FILE_TOO_LARGE, "文件超过 5MB，请精简后重试")
+        raise bad_request(too_large, "文件超过 5MB，请精简后重试")
     # 纯文本没有文件头可核，跳过 magic 校验
     magic = _MAGIC.get(ext)
     if magic and not data.startswith(magic):
-        raise bad_request(ErrorCode.JD_FILE_UNSUPPORTED, f"文件内容与扩展名不符（{ext}）")
+        raise bad_request(unsupported, f"文件内容与扩展名不符（{ext}）")
 
     try:
         if ext == ".pdf":
@@ -105,10 +130,10 @@ def extract_text(filename: str, data: bytes) -> str:
         else:
             text = _from_plain(data)
     except Exception as exc:  # noqa: BLE001 —— 解析库异常统一转成可读错误
-        logger.warning("JD 文件解析失败（%s）：%s: %s", filename, type(exc).__name__, exc)
-        raise bad_request(ErrorCode.JD_FILE_NO_TEXT, _NO_TEXT) from exc
+        logger.warning("文件解析失败（%s）：%s: %s", filename, type(exc).__name__, exc)
+        raise bad_request(no_text, _NO_TEXT) from exc
 
     text = _clean(text)
     if not text:
-        raise bad_request(ErrorCode.JD_FILE_NO_TEXT, _NO_TEXT)
+        raise bad_request(no_text, _NO_TEXT)
     return text
