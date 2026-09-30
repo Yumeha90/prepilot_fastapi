@@ -142,6 +142,25 @@ class SavePreviewOut(BaseModel):
     rounds_error: str = ""
 
 
+class JdVersionOut(BaseModel):
+    """JD 版本列表项（编辑页「版本历史」抽屉 + P18 回溯入口）。"""
+
+    version: int
+    change_summary: str = ""
+    changed_by: int | None = None
+    changed_by_name: str = ""
+    created_at: datetime
+
+
+class JdVersionDetailOut(JdVersionOut):
+    """某一版 JD 的完整快照（只读，用于「当年按哪版标准算的分」）。"""
+
+    position_id: int
+    hard_gates: list[str] = Field(default_factory=list)
+    competencies: list[dict[str, Any]] = Field(default_factory=list)
+    bonuses: list[str] = Field(default_factory=list)
+
+
 class JdParseIn(BaseModel):
     """AI 拆解入参：原文来自前端输入框（可能是粘贴的，也可能是上传抽取回填的）。"""
 
@@ -163,14 +182,6 @@ class JdExtractOut(BaseModel):
 
     filename: str
     text: str
-
-
-class ImpactOut(BaseModel):
-    """保存前的「影响预览」：结构化变更会波及多少在流程候选人（本期恒为 0）。"""
-
-    jd_changed: bool
-    affected_candidates: int = 0
-    message: str = ""
 
 
 class MessageOut(BaseModel):

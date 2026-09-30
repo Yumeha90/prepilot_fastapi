@@ -68,6 +68,19 @@ def test_normalize_items_cleans_and_caps():
     assert len(normalize_items([f"x{i}" for i in range(9)], "gate")) == 5
 
 
+def test_normalize_items_keeps_acronyms():
+    """`SQL` 曾被「孤立前导字母」规则逐层剥成 `L`（S 被当成脏前缀）。
+
+    规则收紧为「字母后跟中文」或「字母 + 大写小写」（`LGo/Python`）才算脏前缀，
+    SQL / Redis / JVM / A/B 测试 这类缩写与专有名词必须原样保留。
+    """
+    # 5 项上限：这里正好 5 条，再多会被截断（见上一用例）
+    out = normalize_items(
+        ["SQL", "Redis", "A/B 测试", "LGo/Python", "L本科及以上"], "comp"
+    )
+    assert out == ["SQL", "Redis", "A/B 测试", "Go/Python", "本科及以上"]
+
+
 def test_br20_weight_rules():
     ok = [CompetencyIn(text=f"c{i}", weight=w) for i, w in enumerate([40, 35, 25])]
     validate_jd(["本科"], ok)

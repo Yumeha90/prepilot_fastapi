@@ -147,6 +147,11 @@ export default {
       '終了すると新規候補者の受付を停止し、一覧では既定で非表示になります（「終了済みを表示」で再表示）。進行中の候補者は自動的に不合格になりません。ボードで処理してください。終了したポジションは 1 年保持され、再開できます。',
     deleteTitle: 'ポジションを削除',
     deleteHint: 'この下書きは完全に削除され、復元できません。',
+    versionHistory: 'JD バージョン履歴',
+    versionSnapshotTitle: 'v{{v}} の JD スナップショット',
+    viewVersion: '表示',
+    backToVersionList: '一覧に戻る',
+    noVersions: '履歴はまだありません。JD を確定すると作成されます',
     deleteBlocked: '下書きのみ削除できます。それ以外は「終了」を使用してください',
     changeTitle: '変更を保存',
     jdChangeWithCandidates:

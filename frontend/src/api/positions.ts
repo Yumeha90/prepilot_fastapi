@@ -53,6 +53,22 @@ export interface PositionDetail extends Omit<PositionItem, 'round_count'> {
   closed_at: string | null
 }
 
+/** JD 版本历史项（P18 回溯「当年按哪版标准算的分」） */
+export interface JdVersionItem {
+  version: number
+  change_summary: string
+  changed_by: number | null
+  changed_by_name: string
+  created_at: string
+}
+
+export interface JdVersionDetail extends JdVersionItem {
+  position_id: number
+  hard_gates: string[]
+  competencies: Competency[]
+  bonuses: string[]
+}
+
 export interface Paged<T> {
   items: T[]
   total: number
@@ -170,5 +186,17 @@ export async function pausePosition(id: number): Promise<PositionDetail> {
 /** 已暂停 → 招聘中：恢复接收新候选人 */
 export async function resumePosition(id: number): Promise<PositionDetail> {
   const { data } = await apiClient.post<PositionDetail>(`${BASE}/${id}/resume`)
+  return data
+}
+
+/** JD 版本历史（倒序）：每次结构化变更落一行快照 */
+export async function fetchJdVersions(id: number): Promise<JdVersionItem[]> {
+  const { data } = await apiClient.get<JdVersionItem[]>(`${BASE}/${id}/jd/versions`)
+  return data
+}
+
+/** 某一版 JD 的完整快照（只读） */
+export async function fetchJdVersion(id: number, version: number): Promise<JdVersionDetail> {
+  const { data } = await apiClient.get<JdVersionDetail>(`${BASE}/${id}/jd/versions/${version}`)
   return data
 }

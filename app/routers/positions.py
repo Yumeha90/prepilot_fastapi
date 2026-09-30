@@ -14,9 +14,10 @@ from app.core.errors import ErrorCode, bad_request
 from app.models.position import Position
 from app.models.user import User
 from app.schemas.position import (
-    ImpactOut,
     JdIn,
     JdOut,
+    JdVersionDetailOut,
+    JdVersionOut,
     MessageOut,
     Paged,
     PositionCreateIn,
@@ -286,6 +287,55 @@ async def save_jd(
     return _jd_out(updated)
 
 
+@router.get("/{position_id}/jd/versions", response_model=list[JdVersionOut])
+async def list_jd_versions(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*VIEW_PERMS)),
+) -> list[JdVersionOut]:
+    """JD 版本历史（倒序）。P18 用它回答「当年按哪版标准算的分」。"""
+    position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
+    rows = await svc.list_jd_versions(db, position_id)
+    names = await _names(db, {r.changed_by for r in rows if r.changed_by})
+    return [
+        JdVersionOut(
+            version=r.version,
+            change_summary=r.change_summary,
+            changed_by=r.changed_by,
+            changed_by_name=names.get(r.changed_by, "") if r.changed_by else "",
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/{position_id}/jd/versions/{version}", response_model=JdVersionDetailOut)
+async def get_jd_version(
+    position_id: int,
+    version: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*VIEW_PERMS)),
+) -> JdVersionDetailOut:
+    """某一版 JD 的完整快照（只读）。"""
+    position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
+    row = await svc.get_jd_version(db, position_id, version)
+    snap = row.snapshot_json or {}
+    names = await _names(db, {row.changed_by} if row.changed_by else set())
+    return JdVersionDetailOut(
+        version=row.version,
+        change_summary=row.change_summary,
+        changed_by=row.changed_by,
+        changed_by_name=names.get(row.changed_by, "") if row.changed_by else "",
+        created_at=row.created_at,
+        position_id=row.position_id,
+        hard_gates=list(snap.get("hard_gates") or []),
+        competencies=[dict(c) for c in (snap.get("competencies") or [])],
+        bonuses=list(snap.get("bonuses") or []),
+    )
+
+
 @router.post("/{position_id}/save-preview", response_model=SavePreviewOut)
 async def save_preview(
     position_id: int,
@@ -302,25 +352,6 @@ async def save_preview(
     return SavePreviewOut(**await svc.preview_save(db, position, payload.jd, payload.rounds))
 
 
-@router.get("/{position_id}/jd/impact", response_model=ImpactOut)
-async def jd_impact(
-    position_id: int,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_any_perm(*VIEW_PERMS)),
-) -> ImpactOut:
-    """保存前的影响预览：结构化变更会波及多少在流程候选人（本期无候选人，恒 0）。"""
-    position = await svc.get_position(db, position_id)
-    await svc.ensure_can_view(db, user, position)
-    affected = await svc.count_active_candidates(db, position.id)
-    return ImpactOut(
-        jd_changed=bool(position.jd_hash),
-        affected_candidates=affected,
-        message=(
-            f"本次修改将影响 {affected} 位在流程候选人的匹配分，需重新计算"
-            if affected
-            else "当前没有在流程候选人，可安全保存"
-        ),
-    )
 
 
 # ---------------------------------------------------------------- 流程配置

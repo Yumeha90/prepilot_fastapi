@@ -23,6 +23,7 @@ from app.core.errors import AppError, ErrorCode, bad_request, forbidden, not_fou
 from app.models.position import JdVersion, Position, PositionRound
 from app.models.user import User
 from app.schemas.position import CompetencyIn, JdIn, RoundIn
+from app.services.match_score import count_current_scores, mark_scores_stale
 
 # 轮次类型与上限（BR-23）
 ROUND_TYPES = ("r1", "r2", "hr", "offer")
@@ -45,10 +46,11 @@ STATUS_TRANSITIONS = {
 
 # 模型输出常见的脏前缀：编号（1. / 1、）、项目符号（- * •）、
 # 以及孤立的前导字母（实测出现过 `L本科及以上`、`LGo/Python`）。
-# 匹配规则刻意保守：单个字母后必须紧跟中文或大写字母才算脏前缀，
-# 因此 "Java" "Python" "R&D" "A/B 测试" 等正常条目不会被误伤。
+# 匹配规则刻意保守：单个字母后必须紧跟【中文】，或紧跟【大写 + 小写】（如 `LGo/Python`）
+# 才算脏前缀。不能用「后跟大写字母」，否则 `SQL` 会被逐层剥成 `L`、
+# `Redis` / `JVM` 一类缩写同理遭殃（这个坑是写第三段测试时用 SQL 试出来的）。
 _LEADING_JUNK_RE = re.compile(
-    r"^(?:[0-9]+[.、)）:：]\s*|[-*•·▪◦]\s*|[A-Za-z](?=[\u4e00-\u9fff]|[A-Z]))"
+    r"^(?:[0-9]+[.、)）:：]\s*|[-*•·▪◦]\s*|[A-Za-z](?=[\u4e00-\u9fff]|[A-Z][a-z]))"
 )
 
 
@@ -86,6 +88,69 @@ def jd_hash_of(
     payload = canonical_jd(hard_gates, competencies, bonuses)
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def summarize_jd_change(
+    old: dict | None,
+    hard_gates: list[str],
+    competencies: list[dict],
+    bonuses: list[str],
+    stale_scores: int = 0,
+) -> str:
+    """把「两版 JD 差在哪」写成一句人话（存 `jd_versions.change_summary`）。
+
+    P18 要回答「当年按哪版标准算的分」，只写「JD 结构化变更」等于没写；
+    这里给出「新增/删除几项、权重调整几项」这类可扫读的摘要。
+    """
+    if not old or not (old.get("hard_gates") or old.get("competencies")):
+        return "JD 首次确认"
+
+    parts: list[str] = []
+
+    def diff_items(label: str, o: list, n: list) -> None:
+        added = [x for x in n if x not in o]
+        removed = [x for x in o if x not in n]
+        if added:
+            parts.append(f"新增{label}{len(added)}项")
+        if removed:
+            parts.append(f"删除{label}{len(removed)}项")
+
+    diff_items(
+        "硬性门槛",
+        [_norm_text(x) for x in (old.get("hard_gates") or [])],
+        [_norm_text(x) for x in hard_gates],
+    )
+    diff_items(
+        "加分项",
+        [_norm_text(x) for x in (old.get("bonuses") or [])],
+        [_norm_text(x) for x in bonuses],
+    )
+
+    old_comps = {
+        _norm_text(c.get("text", "")): int(c.get("weight", 0))
+        for c in (old.get("competencies") or [])
+    }
+    new_comps = {
+        _norm_text(c.get("text", "")): int(c.get("weight", 0))
+        for c in competencies
+    }
+    added = [t for t in new_comps if t not in old_comps]
+    removed = [t for t in old_comps if t not in new_comps]
+    reweighted = [
+        t for t in new_comps if t in old_comps and old_comps[t] != new_comps[t]
+    ]
+    if added:
+        parts.append(f"新增核心能力{len(added)}项")
+    if removed:
+        parts.append(f"删除核心能力{len(removed)}项")
+    if reweighted:
+        parts.append(f"权重调整{len(reweighted)}项")
+
+    if not parts:
+        parts.append("JD 结构化调整")
+    if stale_scores:
+        parts.append(f"{stale_scores} 条匹配分待重算")
+    return "；".join(parts)[:255]
 
 
 def _slug(text: str, used: set[str]) -> str:
@@ -260,9 +325,13 @@ def jd_completion(position: Position) -> int:
     return score
 
 
-async def count_active_candidates(db: AsyncSession, position_id: int) -> int:
-    """在流程候选人数。3.3 引入 applications 表后改为真实查询。"""
-    return 0
+async def count_affected_scores(db: AsyncSession, position_id: int) -> int:
+    """JD 变更会波及多少条匹配分 = 当前有效（CURRENT）的分数条数。
+
+    本期没有候选人表，用「有当前匹配分的记录数」作为影响面；
+    3.3 接入 applications 后可改为「在流程 且 有当前分」，调用点不用动。
+    """
+    return await count_current_scores(db, position_id)
 
 
 async def save_rounds(db: AsyncSession, position: Position, rounds: list[RoundIn]) -> None:
@@ -329,6 +398,13 @@ async def save_jd(
     new_hash = jd_hash_of(gates, comps_in, bonus)
     changed = new_hash != position.jd_hash
 
+    # 旧版内容同样要在覆写前取，用于生成人话 diff 摘要
+    old_snapshot = {
+        "hard_gates": list(position.jd_hard_gates or []),
+        "competencies": [dict(c) for c in (position.jd_competencies or [])],
+        "bonuses": list(position.jd_bonuses or []),
+    }
+
     position.jd_raw_text = raw_text or position.jd_raw_text
     position.jd_hard_gates = gates
     position.jd_competencies = comps_raw
@@ -340,6 +416,10 @@ async def save_jd(
         position.jd_hash = new_hash
         if had_hash:
             position.jd_version = int(position.jd_version) + 1
+            # JD 标准变了 → 存量匹配分全部置 STALE（不自动重算，HR 手动触发）
+            stale = await mark_scores_stale(db, position.id)
+        else:
+            stale = 0
         db.add(
             JdVersion(
                 position_id=position.id,
@@ -349,12 +429,16 @@ async def save_jd(
                     "competencies": comps_raw,
                     "bonuses": bonus,
                 },
-                change_summary="JD 结构化变更" if had_hash else "JD 首次确认",
+                change_summary=summarize_jd_change(
+                    old_snapshot if had_hash else None,
+                    gates,
+                    comps_raw,
+                    bonus,
+                    stale_scores=stale,
+                ),
                 changed_by=user.id,
             )
         )
-        # 3.3/P18 接入后在此把存量匹配分置 STALE：
-        # UPDATE match_scores SET stale = true WHERE position_id = :id
     position.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(position)
@@ -454,10 +538,36 @@ async def preview_save(
     return {
         "jd_changed": jd_changed,
         "rounds_changed": rounds_changed,
-        "affected_candidates": await count_active_candidates(db, position.id),
+        "affected_candidates": await count_affected_scores(db, position.id),
         "jd_error": jd_error,
         "rounds_error": rounds_error,
     }
+
+
+async def list_jd_versions(db: AsyncSession, position_id: int) -> list[JdVersion]:
+    """版本历史（新 → 旧）。"""
+    res = await db.execute(
+        select(JdVersion)
+        .where(JdVersion.position_id == position_id)
+        .order_by(JdVersion.version.desc())
+    )
+    return list(res.scalars().all())
+
+
+async def get_jd_version(
+    db: AsyncSession, position_id: int, version: int
+) -> JdVersion:
+    """取某一版快照；不存在直接 404（前端只展示已存在的版本）。"""
+    res = await db.execute(
+        select(JdVersion).where(
+            JdVersion.position_id == position_id,
+            JdVersion.version == version,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise not_found(f"该职位没有 v{version} 版本的 JD 记录")
+    return row
 
 
 async def can_delete(db: AsyncSession, position: Position) -> tuple[bool, str]:
