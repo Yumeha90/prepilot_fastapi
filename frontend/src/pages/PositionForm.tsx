@@ -9,7 +9,8 @@
  * - JD 区块：三区块均为「行内编辑 + 上下移 + 删除」，排序不影响权重（PRD §3.2.2）
  * - 「暂存草稿」不校验权重、不生成新版本；「保存」校验通过后才生效
  * - 保存前先调 save-preview：若判定 JD 或流程发生实质变更，弹二次确认
- * - 文件上传与 AI 拆解两个入口在第二阶段接入，此处不渲染
+ * - 上传 JD 文件：后端同步抽取纯文本后回填输入框，文件不落库（不做 OCR）
+ * - AI 拆解：根据原文生成三区块内容，只填表单不落库，确认后随保存生效
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -28,6 +29,7 @@ import {
   Slider,
   Space,
   Typography,
+  Upload,
   message,
 } from 'antd'
 import {
@@ -35,7 +37,10 @@ import {
   ArrowUpOutlined,
   DeleteOutlined,
   PlusOutlined,
+  ThunderboltOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
+import { extractJdText, parseJd } from '@/api/jd'
 
 import {
   createPosition,
@@ -57,10 +62,13 @@ const { Text, Title } = Typography
 const ROUND_TYPES: RoundType[] = ['r1', 'r2', 'hr', 'offer']
 
 function evenWeights(count: number): number[] {
+  // 按「5 的份数」分配再乘回 5：BR-20 要求权重步进 5，
+  // 朴素的 100/count 在 3 项时会得到 34/33/33，保存会被校验拦下
   if (count <= 0) return []
-  const base = Math.floor(100 / count)
-  const rem = 100 % count
-  return Array.from({ length: count }, (_, i) => base + (i < rem ? 1 : 0))
+  const units = 20
+  const base = Math.floor(units / count)
+  const rem = units % count
+  return Array.from({ length: count }, (_, i) => (base + (i < rem ? 1 : 0)) * 5)
 }
 
 function move<T>(list: T[], index: number, delta: number): T[] {
@@ -95,6 +103,9 @@ export default function PositionForm() {
     affected_candidates: number
   } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const [parseNotice, setParseNotice] = useState('')
 
   const { data: detail } = useQuery({
     queryKey: ['position', positionId],
@@ -232,6 +243,41 @@ export default function PositionForm() {
     }
   }
 
+  // 上传 JD 文件：后端同步抽取纯文本后回填输入框，文件本身不留存
+  const handleUpload = async (file: File) => {
+    setExtracting(true)
+    try {
+      const res = await extractJdText(file)
+      setRawText(res.text)
+      message.success(t('position.msg.jdExtracted'))
+    } catch (e) {
+      message.error(errMsg(e))
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  // AI 拆解：结果只填充表单，不落库，HR 确认后随保存生效
+  const handleParse = async () => {
+    if (!rawText.trim()) {
+      message.error(t('position.form.jdRawPlaceholder'))
+      return
+    }
+    setParsing(true)
+    try {
+      const res = await parseJd(rawText)
+      setHardGates(res.hard_gates)
+      setCompetencies(res.competencies)
+      setBonuses(res.bonuses)
+      setParseNotice(res.notice)
+      message.success(t('position.msg.jdParsed'))
+    } catch (e) {
+      message.error(errMsg(e))
+    } finally {
+      setParsing(false)
+    }
+  }
+
   const addRound = (type: RoundType) =>
     setRounds((prev) => [...prev, { type, interviewer_id: null }])
 
@@ -290,6 +336,32 @@ export default function PositionForm() {
             placeholder={t('position.form.jdRawPlaceholder')}
             onChange={(e) => setRawText(e.target.value)}
           />
+          <Space wrap style={{ marginTop: 4 }}>
+            <Upload
+              accept=".pdf,.docx,.txt,.md"
+              showUploadList={false}
+              beforeUpload={(file) => {
+                void handleUpload(file as unknown as File)
+                return false // 阻止 antd 自动上传，改由上面自己发请求
+              }}
+            >
+              <Button icon={<UploadOutlined />} loading={extracting}>
+                {t('position.form.uploadJd')}
+              </Button>
+            </Upload>
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={parsing}
+              disabled={!rawText.trim()}
+              onClick={handleParse}
+            >
+              {t('position.form.aiParse')}
+            </Button>
+            <Text type="secondary">{t('position.form.uploadHint')}</Text>
+          </Space>
+          {parseNotice && (
+            <Alert type="warning" showIcon message={parseNotice} style={{ marginTop: 8 }} />
+          )}
         </Space>
 
         <Divider orientation="left" style={{ margin: '8px 0' }}>

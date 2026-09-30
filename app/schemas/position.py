@@ -142,6 +142,29 @@ class SavePreviewOut(BaseModel):
     rounds_error: str = ""
 
 
+class JdParseIn(BaseModel):
+    """AI 拆解入参：原文来自前端输入框（可能是粘贴的，也可能是上传抽取回填的）。"""
+
+    raw_text: str = Field(min_length=1)
+
+
+class JdParseOut(BaseModel):
+    """AI 拆解结果。**不落库**，前端填充表单后由 HR 确认保存（BR-01）。"""
+
+    hard_gates: list[str]
+    competencies: list[dict[str, Any]]
+    bonuses: list[str]
+    # 需要 HR 留意的提示（例如核心能力不足 3 项），为空表示无需提示
+    notice: str = ""
+
+
+class JdExtractOut(BaseModel):
+    """文件上传抽取结果：只回纯文本，文件本身不留存。"""
+
+    filename: str
+    text: str
+
+
 class ImpactOut(BaseModel):
     """保存前的「影响预览」：结构化变更会波及多少在流程候选人（本期恒为 0）。"""
 

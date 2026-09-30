@@ -43,12 +43,24 @@ STATUS_TRANSITIONS = {
 # ---------------------------------------------------------------- JD 哈希与校验
 
 
+# 模型输出常见的脏前缀：编号（1. / 1、）、项目符号（- * •）、
+# 以及孤立的前导字母（实测出现过 `L本科及以上`、`LGo/Python`）。
+# 匹配规则刻意保守：单个字母后必须紧跟中文或大写字母才算脏前缀，
+# 因此 "Java" "Python" "R&D" "A/B 测试" 等正常条目不会被误伤。
+_LEADING_JUNK_RE = re.compile(
+    r"^(?:[0-9]+[.、)）:：]\s*|[-*•·▪◦]\s*|[A-Za-z](?=[\u4e00-\u9fff]|[A-Z]))"
+)
+
+
 def _norm_text(value: str) -> str:
-    """规范化条目文本：去空白、去模型偶发的前导脏字符（实测出现过 `Lxxx`）。"""
+    """规范化条目文本：去空白、去编号/项目符号/孤立前导脏字符。"""
     text = (value or "").strip()
-    # 去掉孤立的前导字母/数字编号，例如 "L本科及以上" -> "本科及以上"
-    text = re.sub(r"^[A-Za-z](?=[\u4e00-\u9fff])", "", text)
-    return re.sub(r"\s+", " ", text).strip()
+    for _ in range(3):  # 可能叠多层，例如 "- 1. 本科及以上"
+        stripped = _LEADING_JUNK_RE.sub("", text).strip()
+        if stripped == text:
+            break
+        text = stripped
+    return re.sub(r"\s+", " ", text).strip(" \t\"'「」『』")
 
 
 def canonical_jd(
@@ -145,11 +157,18 @@ def validate_jd(hard_gates: list[str], competencies: list[CompetencyIn]) -> None
 
 
 def even_weights(count: int) -> list[int]:
-    """一键均分：100 ÷ 项数，余数补给前 N 项。"""
+    """一键均分：100 ÷ 项数，余数补给前 N 项。
+
+    **必须落在 5 的倍数上**：BR-20 要求权重步进 5，而朴素的 `100 // count`
+    在项数不是 2/4/5/10/20 时会产出非 5 倍数（3 项 → 34/33/33），
+    前端点「一键均分」后直接点保存会被校验拦下。
+    做法：先按「5 的份数」（100 ÷ 5 = 20 份）分配，再乘回 5。
+    """
     if count <= 0:
         return []
-    base, remainder = divmod(100, count)
-    return [base + 1] * remainder + [base] * (count - remainder)
+    units, step = 20, 5  # 20 份 × 5 = 100
+    base, remainder = divmod(units, count)
+    return [(base + 1 if i < remainder else base) * step for i in range(count)]
 
 
 # ---------------------------------------------------------------- 轮次校验（BR-23）

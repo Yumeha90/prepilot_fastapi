@@ -57,6 +57,12 @@ langgraph==0.2.76
 pymilvus==3.0.2
 langfuse==4.15.6
 
+# ---- 文件解析（JD 上传 / 简历解析：只抽纯文本，不做 OCR）----
+# 2026-09-30 核对：pdfplumber 及其间接依赖（pdfminer.six / Pillow / lxml / pypdfium2）
+# 均有 linux wheel，不会在 python:3.12-slim 镜像里触发源码编译。
+pdfplumber==0.11.10
+python-docx==1.2.0
+
 # ---- 测试 ----
 pytest==9.1.1
 pytest-asyncio==1.4.0

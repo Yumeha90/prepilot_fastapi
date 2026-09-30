@@ -42,6 +42,13 @@ class ErrorCode:
     PUBLISH_BLOCKED = "position.publish_blocked"
     CLOSE_BLOCKED = "position.close_blocked"
 
+    # JD 文件抽取与 AI 拆解（PRD 3.2 第二段）
+    JD_FILE_TOO_LARGE = "position.jd_file_too_large"
+    JD_FILE_UNSUPPORTED = "position.jd_file_unsupported"
+    JD_FILE_NO_TEXT = "position.jd_file_no_text"
+    JD_TEXT_TOO_SHORT = "position.jd_text_too_short"
+    LLM_FAILED = "common.llm_failed"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

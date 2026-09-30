@@ -81,9 +81,12 @@ def test_br20_weight_rules():
 
 
 def test_even_weights():
-    assert even_weights(3) == [34, 33, 33]
+    # 必须落在 5 的倍数上，否则「一键均分」后保存会被 BR-20 拦下
+    assert even_weights(3) == [35, 35, 30]
     assert even_weights(4) == [25, 25, 25, 25]
-    assert sum(even_weights(7)) == 100
+    for n in range(1, 6):
+        assert sum(even_weights(n)) == 100
+        assert all(w % 5 == 0 for w in even_weights(n))
 
 
 def _rounds(*types, interviewer: int | None = 1) -> list[RoundIn]:
