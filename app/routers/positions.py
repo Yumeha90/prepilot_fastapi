@@ -85,6 +85,28 @@ def _item(p: Position, names: dict[int, str], candidates: int = 0) -> PositionLi
     )
 
 
+def _status_out(p: Position) -> PositionOut:
+    """状态流转类接口（发布 / 暂停 / 恢复 / 关闭 / 重新打开）共用出参。
+
+    前端拿到结果后只提示 + 刷新列表，因此这里不回填 rounds / owner_name。
+    """
+    return PositionOut(
+        id=p.id,
+        name=p.name,
+        status=p.status,
+        owner_id=p.owner_id,
+        jd_version=p.jd_version,
+        jd_status=p.jd_status,
+        jd_completion=svc.jd_completion(p),
+        rounds=[],
+        copied_from_id=p.copied_from_id,
+        closed_at=p.closed_at,
+        created_at=p.created_at,
+        updated_at=p.updated_at,
+        jd=_jd_out(p),
+    )
+
+
 # ---------------------------------------------------------------- 列表与详情
 
 
@@ -329,7 +351,9 @@ async def publish_position(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_perm("position:edit")),
 ) -> PositionOut:
+    """草稿 → 招聘中：要求 JD 已确认且 JD / 轮次校验全部通过。"""
     position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
     await svc.check_publish_ready(db, position)
     await svc.change_status(db, position, "open")
     names = await _names(
@@ -355,6 +379,32 @@ async def publish_position(
     )
 
 
+@router.post("/{position_id}/pause", response_model=PositionOut)
+async def pause_position(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_perm("position:edit")),
+) -> PositionOut:
+    """招聘中 → 已暂停：停止接收新候选人，在流程候选人不受影响。"""
+    position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
+    await svc.change_status(db, position, "paused")
+    return _status_out(position)
+
+
+@router.post("/{position_id}/resume", response_model=PositionOut)
+async def resume_position(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_perm("position:edit")),
+) -> PositionOut:
+    """已暂停 → 招聘中：恢复接收新候选人。"""
+    position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
+    await svc.change_status(db, position, "open")
+    return _status_out(position)
+
+
 @router.post("/{position_id}/close", response_model=PositionOut)
 async def close_position(
     position_id: int,
@@ -362,22 +412,9 @@ async def close_position(
     user: User = Depends(require_perm("position:edit")),
 ) -> PositionOut:
     position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
     await svc.change_status(db, position, "closed")
-    return PositionOut(
-        id=position.id,
-        name=position.name,
-        status=position.status,
-        owner_id=position.owner_id,
-        jd_version=position.jd_version,
-        jd_status=position.jd_status,
-        jd_completion=svc.jd_completion(position),
-        rounds=[],
-        copied_from_id=position.copied_from_id,
-        closed_at=position.closed_at,
-        created_at=position.created_at,
-        updated_at=position.updated_at,
-        jd=_jd_out(position),
-    )
+    return _status_out(position)
 
 
 @router.post("/{position_id}/reopen", response_model=PositionOut)
@@ -387,22 +424,9 @@ async def reopen_position(
     user: User = Depends(require_perm("position:edit")),
 ) -> PositionOut:
     position = await svc.get_position(db, position_id)
+    await svc.ensure_can_view(db, user, position)
     await svc.change_status(db, position, "open")
-    return PositionOut(
-        id=position.id,
-        name=position.name,
-        status=position.status,
-        owner_id=position.owner_id,
-        jd_version=position.jd_version,
-        jd_status=position.jd_status,
-        jd_completion=svc.jd_completion(position),
-        rounds=[],
-        copied_from_id=position.copied_from_id,
-        closed_at=position.closed_at,
-        created_at=position.created_at,
-        updated_at=position.updated_at,
-        jd=_jd_out(position),
-    )
+    return _status_out(position)
 
 
 @router.post("/{position_id}/duplicate", response_model=PositionOut, status_code=201)

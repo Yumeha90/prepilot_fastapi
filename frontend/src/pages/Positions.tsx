@@ -20,7 +20,10 @@ import {
   deletePosition,
   duplicatePosition,
   fetchPositions,
+  pausePosition,
+  publishPosition,
   reopenPosition,
+  resumePosition,
   type PositionItem,
   type PositionStatus,
 } from '@/api/positions'
@@ -89,6 +92,27 @@ export default function Positions() {
       message.success(t('position.msg.reopened'))
     },
     onError: (e) => message.error(errMsg(e, 'common.error')),
+  })
+
+  // 状态流转三件套：发布（草稿→招聘中）/ 暂停（招聘中→已暂停）/ 恢复（已暂停→招聘中）
+  // 均由后端校验（JD 未确认或轮次不合规 → publish_blocked / status_invalid），
+  // 前端不额外弹窗，直接把后端文案提示出来。
+  const statusMut = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: 'publish' | 'pause' | 'resume' }) =>
+      action === 'publish' ? publishPosition(id) : action === 'pause' ? pausePosition(id) : resumePosition(id),
+    onSuccess: (_data, vars) => {
+      refresh()
+      message.success(
+        t(
+          vars.action === 'publish'
+            ? 'position.msg.published'
+            : vars.action === 'pause'
+              ? 'position.msg.paused'
+              : 'position.msg.resumed',
+        ),
+      )
+    },
+    onError: (e) => message.error(errMsg(e, 'position.publishBlocked')),
   })
 
   const deleteMut = useMutation({
@@ -174,7 +198,7 @@ export default function Positions() {
     columns.push({
       title: t('position.actions'),
       key: 'actions',
-      width: 220,
+      width: 300,
       render: (_, row) => (
         <Space size={4} wrap>
           <Button type="link" size="small" onClick={() => navigate(`/positions/${row.id}/edit`)}>
@@ -183,6 +207,33 @@ export default function Positions() {
           <Button type="link" size="small" onClick={() => setPending({ action: 'duplicate', item: row })}>
             {t('position.action.duplicate')}
           </Button>
+          {row.status === 'draft' && (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => statusMut.mutate({ id: row.id, action: 'publish' })}
+            >
+              {t('position.action.publish')}
+            </Button>
+          )}
+          {row.status === 'open' && (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => statusMut.mutate({ id: row.id, action: 'pause' })}
+            >
+              {t('position.action.pause')}
+            </Button>
+          )}
+          {row.status === 'paused' && (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => statusMut.mutate({ id: row.id, action: 'resume' })}
+            >
+              {t('position.action.resume')}
+            </Button>
+          )}
           {row.status === 'closed' ? (
             <Button type="link" size="small" onClick={() => reopenMut.mutate(row.id)}>
               {t('position.action.reopen')}

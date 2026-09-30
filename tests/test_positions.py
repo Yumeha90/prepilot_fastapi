@@ -175,6 +175,21 @@ async def _scenario_lifecycle() -> None:
         assert published.status_code == 200, published.text
         assert published.json()["status"] == "open"
 
+        # 招聘中 → 已暂停 → 招聘中（2026-09-30 补齐 UI 入口）
+        paused = await client.post(f"/api/positions/{pid}/pause", headers=headers)
+        assert paused.status_code == 200, paused.text
+        assert paused.json()["status"] == "paused"
+        # 已暂停不能再暂停；草稿也不能直接恢复
+        assert (
+            await client.post(f"/api/positions/{pid}/pause", headers=headers)
+        ).status_code == 400
+        assert (
+            await client.post(f"/api/positions/{pid}/resume", headers=headers)
+        ).status_code == 200
+        assert (
+            await client.post(f"/api/positions/{pid}/resume", headers=headers)
+        ).status_code == 400  # 已是招聘中，重复恢复被状态机拒绝
+
         # 复制：面试官必须清空（BR-24）
         dup = await client.post(f"/api/positions/{pid}/duplicate", headers=headers)
         assert dup.status_code == 201, dup.text
@@ -209,6 +224,85 @@ async def _scenario_lifecycle() -> None:
 
 def test_position_lifecycle():
     _run(_scenario_lifecycle())
+
+
+async def _scenario_publish_gate() -> None:
+    """发布闸门：JD 未确认 / 轮次不合规的草稿一律 publish_blocked。"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = await _login(client)
+        created = await client.post(
+            "/api/positions", json={"name": "pytest-发布闸门"}, headers=headers
+        )
+        pid = created.json()["id"]
+
+        # 1) 空 JD
+        blocked = await client.post(f"/api/positions/{pid}/publish", headers=headers)
+        assert blocked.status_code == 400
+        assert blocked.json()["detail"]["code"] == "position.publish_blocked"
+
+        # 2) JD 只暂存未确认（BR-01）
+        await client.put(
+            f"/api/positions/{pid}/jd",
+            json={
+                "raw_text": "中级后端",
+                "hard_gates": ["本科及以上"],
+                "competencies": [
+                    {"text": "Go", "weight": 50},
+                    {"text": "SQL", "weight": 30},
+                    {"text": "微服务", "weight": 20},
+                ],
+                "bonuses": [],
+                "confirm": False,
+            },
+            headers=headers,
+        )
+        assert (
+            await client.post(f"/api/positions/{pid}/publish", headers=headers)
+        ).status_code == 400
+
+        # 3) JD 已确认但尚未配置面试流程：草稿阶段允许空流程，发布不放行
+        await client.put(
+            f"/api/positions/{pid}/jd",
+            json={
+                "hard_gates": ["本科及以上"],
+                "competencies": [
+                    {"text": "Go", "weight": 50},
+                    {"text": "SQL", "weight": 30},
+                    {"text": "微服务", "weight": 20},
+                ],
+                "bonuses": [],
+                "confirm": True,
+            },
+            headers=headers,
+        )
+        blocked2 = await client.post(f"/api/positions/{pid}/publish", headers=headers)
+        assert blocked2.status_code == 400
+        assert blocked2.json()["detail"]["code"] == "position.rounds_invalid"
+
+        # 4) 流程补齐后放行
+        await client.put(
+            f"/api/positions/{pid}/rounds",
+            json={
+                "rounds": [
+                    {"type": "r1", "interviewer_id": 7},
+                    {"type": "hr", "interviewer_id": 3},
+                ]
+            },
+            headers=headers,
+        )
+        ok = await client.post(f"/api/positions/{pid}/publish", headers=headers)
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["status"] == "open"
+
+        await client.post(f"/api/positions/{pid}/close", headers=headers)
+        await client.delete(f"/api/positions/{pid}", headers=headers)
+
+
+def test_publish_gate():
+    """草稿发布受 JD 确认与轮次校验双重闸门。"""
+    _run(_scenario_publish_gate())
 
 
 async def _scenario_visibility() -> None:

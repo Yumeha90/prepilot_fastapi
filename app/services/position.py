@@ -493,6 +493,13 @@ async def check_publish_ready(db: AsyncSession, position: Position) -> None:
     gates = list(position.jd_hard_gates or [])
     comps = [CompetencyIn(**c) for c in (position.jd_competencies or [])]
     validate_jd(gates, comps)
+
+    # 草稿阶段允许先不配流程（validate_rounds 放行空列表），但「发布」意味着
+    # 开始接收候选人并派单，没有流程会直接卡住 3.3 派单 —— 这里额外收紧。
+    if not position.rounds:
+        raise bad_request(
+            ErrorCode.ROUNDS_INVALID, "发布前请先配置面试流程，末位须为 HR 面试或 Offer 审批"
+        )
     validate_rounds(
         [
             RoundIn(name=r.name, type=r.type, interviewer_id=r.interviewer_id)

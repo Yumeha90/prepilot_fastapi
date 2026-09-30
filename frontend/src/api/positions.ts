@@ -160,3 +160,15 @@ export async function publishPosition(id: number): Promise<PositionDetail> {
   const { data } = await apiClient.post<PositionDetail>(`${BASE}/${id}/publish`)
   return data
 }
+
+/** 招聘中 → 已暂停：停止接收新候选人 */
+export async function pausePosition(id: number): Promise<PositionDetail> {
+  const { data } = await apiClient.post<PositionDetail>(`${BASE}/${id}/pause`)
+  return data
+}
+
+/** 已暂停 → 招聘中：恢复接收新候选人 */
+export async function resumePosition(id: number): Promise<PositionDetail> {
+  const { data } = await apiClient.post<PositionDetail>(`${BASE}/${id}/resume`)
+  return data
+}
