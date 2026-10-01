@@ -106,7 +106,13 @@ async def _new_position(
 
 
 async def _new_candidate(
-    client: AsyncClient, headers: dict[str, str], pid: int, *, confirm: bool = True
+    client: AsyncClient,
+    headers: dict[str, str],
+    pid: int,
+    *,
+    confirm: bool = True,
+    education: list[dict] | None = None,
+    years: str = "6 年",
 ) -> tuple[int, int]:
     mail = f"match-{uuid.uuid4().hex[:12]}@example.com"
     created = await client.post(
@@ -131,7 +137,7 @@ async def _new_candidate(
         f"/api/candidates/{cid}/confirm",
         json={
             "profile": {
-                "basic": {"name": "陈匹配", "years": "6 年"},
+                "basic": {"name": "陈匹配", "years": years},
                 "skills": ["Java", "Redis", "Kafka", "MySQL", "Kubernetes", "Go", "分布式系统"],
                 "work": [
                     {
@@ -150,7 +156,9 @@ async def _new_candidate(
                 "projects": [
                     {"name": "支付系统重构", "role": "负责人", "desc": "Java Redis Kafka，带过 3 人小组"}
                 ],
-                "education": [{"school": "某大学", "major": "计算机", "degree": "本科"}],
+                "education": education
+                if education is not None
+                else [{"school": "某大学", "major": "计算机", "degree": "本科"}],
                 "confidence": {"basic": 0.9, "work": 0.8, "skills": 0.9},
             }
         },
@@ -233,18 +241,29 @@ async def _scenario_unknown_gate() -> None:
     """简历没写的信息 ≠ 不满足：标 unknown，不否决，但要提示人工核实。"""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         headers = await _login(client)
-        pid = await _new_position(client, headers, gates=["熟悉 Terraform", "本科及以上"])
+
+        # 简历确实没提 → 真不满足，正常否决
+        pid = await _new_position(client, headers, gates=["熟悉 Terraform"])
         _, app_id = await _new_candidate(client, headers, pid)
         body = (await client.get(f"/api/match/applications/{app_id}", headers=headers)).json()
         assert body["tier"] == "vetoed"
         assert body["vetoed_gates"][0]["text"] == "熟悉 Terraform"
 
-        # 学历信息缺失（profile 里没 education）→ unknown，不算否决
-        pid2 = await _new_position(client, headers, gates=["持有 PMP 证书"])
-        cid, app_id2 = await _new_candidate(client, headers, pid2)
-        _ = cid
+        # 简历没有学历信息 → unknown：不否决，但要摆在页面上让人核实
+        pid2 = await _new_position(client, headers, gates=["本科及以上"])
+        _, app_id2 = await _new_candidate(client, headers, pid2, education=[])
         body2 = (await client.get(f"/api/match/applications/{app_id2}", headers=headers)).json()
-        assert body2["tier"] == "vetoed"  # 简历确实没提 PMP → 真不满足
+        assert body2["tier"] != "vetoed"
+        assert body2["vetoed_gates"] == []
+        assert len(body2["unknown_gates"]) == 1
+        assert "学历" in body2["unknown_gates"][0]["reason"]
+
+        # 年限缺失同理
+        pid3 = await _new_position(client, headers, gates=["本科及以上", "10 年以上"])
+        _, app_id3 = await _new_candidate(client, headers, pid3, years="")
+        body3 = (await client.get(f"/api/match/applications/{app_id3}", headers=headers)).json()
+        assert body3["tier"] != "vetoed"
+        assert any("年限" in g["reason"] for g in body3["unknown_gates"])
 
 
 def test_unknown_gate_not_treated_as_veto():

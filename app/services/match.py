@@ -315,18 +315,19 @@ def evaluate(candidate: Candidate, position: Position) -> dict[str, Any]:
     gates = [str(g) for g in (position.jd_hard_gates or []) if str(g).strip()]
     bonuses_cfg = [str(b) for b in (position.jd_bonuses or []) if str(b).strip()]
 
-    # 1) 一票否决前置（BR-19）
-    vetoed: list[dict] = []
-    for i, gate in enumerate(gates):
-        state, reason = _check_gate(gate, texts, raw)
-        if state == "fail":
-            vetoed.append({"gateId": f"g{i + 1}", "text": gate, "reason": reason})
+    # 1) 一票否决前置（BR-19）：每条门槛只判一次，结果三处复用
+    gates_checked = [(g, *_check_gate(g, texts, raw)) for g in gates]
+    unknown = [
+        {"gateId": f"g{i + 1}", "text": g, "reason": reason}
+        for i, (g, state, reason) in enumerate(gates_checked)
+        if state == "unknown"
+    ]
+    vetoed = [
+        {"gateId": f"g{i + 1}", "text": g, "reason": reason}
+        for i, (g, state, reason) in enumerate(gates_checked)
+        if state == "fail"
+    ]
     if vetoed:
-        unknown = [
-            {"gateId": f"g{i + 1}", "text": g, "reason": r}
-            for i, g in enumerate(gates)
-            if _check_gate(g, texts, raw)[0] == "unknown"
-        ]
         return {
             "score": 0.0,
             "tier": "vetoed",
@@ -401,11 +402,7 @@ def evaluate(candidate: Candidate, position: Position) -> dict[str, Any]:
         "score": score,
         "tier": _tier_of(score),
         "vetoed_gates": [],
-        "unknown_gates": [
-            {"gateId": f"g{i + 1}", "text": g, "reason": r}
-            for i, g in enumerate(gates)
-            if _check_gate(g, texts, raw)[0] == "unknown"
-        ],
+        "unknown_gates": unknown,
         "breakdown": breakdown,
         "evidences": evidences,
         "bonuses": bonuses,
