@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { AI_TIMEOUT } from './client'
 
 import type { ResumeProfile } from './resume'
 
@@ -121,9 +121,13 @@ export async function confirmCandidate(id: number, profile: ResumeProfile): Prom
   return data
 }
 
-/** 对已上传候选人重新解析（不落库，供解析页刷新右栏） */
+/** 对已上传候选人重新解析（不落库，供解析页刷新右栏）。
+ *
+ * AI 接口，走 AI_TIMEOUT：云端一次结构化调用 17~23s，长简历分块更久。 */
 export async function reparseCandidate(id: number): Promise<ParseResultLike> {
-  const { data } = await apiClient.post<ParseResultLike>(`${BASE}/${id}/parse`)
+  const { data } = await apiClient.post<ParseResultLike>(`${BASE}/${id}/parse`, null, {
+    timeout: AI_TIMEOUT,
+  })
   return data
 }
 

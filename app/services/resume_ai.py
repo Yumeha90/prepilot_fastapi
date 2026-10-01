@@ -250,7 +250,9 @@ async def parse_resume(raw_text: str) -> dict:
             "请精简后重新上传，或手动粘贴关键段落",
         )
     logger.info("简历 %d 字，走 L1 分块解析（%d 段）", len(text), len(chunks))
-    results = [await _call(c) for c in chunks]
+    # 并发而非串行（2026-10-01）：云端单次调用实测 17~23s，3 段串行就是 50~70s，
+    # 会撞 nginx proxy_read_timeout。各段互不依赖，gather 把墙钟压到单段的量级。
+    results = await asyncio.gather(*(_call(c) for c in chunks))
     return {
         "profile": _merge([_from_model(r) for r in results]),
         "chunks": len(chunks),

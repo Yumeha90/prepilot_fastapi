@@ -1,4 +1,4 @@
-import apiClient from './client'
+import apiClient, { AI_TIMEOUT } from './client'
 
 /** 简历结构化档案（解析结果 + 人工纠错后写入） */
 export interface ResumeProfile {
@@ -42,13 +42,18 @@ export async function extractResume(file: File): Promise<{ filename: string; tex
   const { data } = await apiClient.post<{ filename: string; text: string }>(
     '/api/resume/extract',
     form,
-    { headers: { 'Content-Type': 'multipart/form-data' } },
+    // 大 PDF / DOCX 抽取可能要好几秒，别用默认超时把它掐断
+    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 },
   )
   return data
 }
 
-/** AI 解析简历（C2，同步）。结果不落库，确认后才写入 */
+/** AI 解析简历（C2，同步，云端实测 17~23s，L1 分块更久）。结果不落库，确认后才写入 */
 export async function parseResume(rawText: string): Promise<ParseResult> {
-  const { data } = await apiClient.post<ParseResult>('/api/resume/parse', { raw_text: rawText })
+  const { data } = await apiClient.post<ParseResult>(
+    '/api/resume/parse',
+    { raw_text: rawText },
+    { timeout: AI_TIMEOUT },
+  )
   return data
 }

@@ -8,9 +8,20 @@ import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
  * 登录态：短期 access token + 长效 refresh token（均存 localStorage）。
  * 遇 401 时用 refresh 换一次新 access 并重放原请求；refresh 也失败则清空登录态。
  */
+/**
+ * AI 类接口专用超时（简历解析 / JD 拆解）。
+ *
+ * 2026-10-01 线上问题：默认 15s 在云端必挂 —— 百炼一次结构化调用实测 17~23s
+ * （简历比 JD 长，输出 token 多），L1 分块还会翻几倍。JD 侧当初已经单独放宽过，
+ * 简历侧漏了，表现为「一进解析页就报错」。
+ * 后端 LLM_TIMEOUT=120s、nginx proxy_read_timeout=120s，这里取 120s 与之对齐。
+ */
+export const AI_TIMEOUT = 120_000
+
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '',
-  timeout: 15_000,
+  // 普通接口 30s 足够；AI 类接口走 AI_TIMEOUT
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -147,6 +158,10 @@ export function extractErrorMessage(error: unknown, fallback = ''): string {
 
 export function extractErrorCode(error: unknown): string | undefined {
   const ax = error as AxiosError<{ detail?: ApiErrorBody | string }>
+  // axios 超时没有响应体，只能从 code/message 识别；统一成 `timeout` 供 i18n 出文案
+  if (ax?.code === 'ECONNABORTED' || /timeout of \d+ms exceeded/i.test(ax?.message ?? '')) {
+    return 'timeout'
+  }
   const detail = ax?.response?.data?.detail
   if (detail && typeof detail === 'object') return detail.code
   return undefined

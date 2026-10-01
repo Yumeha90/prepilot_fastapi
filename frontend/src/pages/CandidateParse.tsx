@@ -182,6 +182,14 @@ export default function CandidateParse() {
       />
 
       {notice && <Alert type="info" showIcon message={notice} style={{ marginBottom: 12 }} />}
+      {parsing && (
+        <Alert
+          type="info"
+          showIcon
+          message={t('candidate.parsingTip')}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       {parseFailed && (
         <Alert
           type="warning"
