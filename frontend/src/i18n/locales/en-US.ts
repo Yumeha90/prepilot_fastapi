@@ -110,8 +110,8 @@ export default {
   candidate: {
     listTitle: 'Candidates',
     uploadResume: 'Upload resume',
-    uploadTitle: 'Upload resume (P04)',
-    parseTitle: 'Resume parsing confirmation (P05)',
+    uploadTitle: 'Upload resume',
+    parseTitle: 'Resume parsing confirmation',
     name: 'Name',
     namePlaceholder: 'Candidate name (auto-detected from the resume)',
     email: 'Email',
@@ -130,8 +130,9 @@ export default {
     },
     action: {
       goParse: 'Parse & confirm',
+      viewResume: 'View resume',
     },
-    positionRequired: 'Position (required)',
+    // Upload page
     positionPlaceholder: 'Select the position this candidate applies for',
     noSelectablePosition: 'No selectable position (its JD must be confirmed first)',
     authRequiredHint: 'You must accept the Data Processing Authorization before uploading',
@@ -149,8 +150,9 @@ export default {
     orPaste: 'Or paste the full resume text',
     pastePlaceholder: 'Paste the resume here (fallback for scans or failed uploads)',
     nextStep: 'Next: parse resume',
-    submitHint: 'Select a position, fill in the email, accept the authorization and provide resume content (≥30 chars)',
+    submitHint: 'Select a position, fill in the name and email, accept the authorization and provide resume content (≥30 chars)',
     resumeOriginal: 'Resume text',
+    noProfile: 'Not parsed yet — no structured profile',
     reparse: 'Re-parse',
     lowConfidence: 'Please verify',
     section: {
@@ -333,6 +335,7 @@ export default {
     'candidate.email_taken': 'Invalid email address',
     'candidate.already_applied': 'This candidate has already applied to a position; multiple applications are not supported',
     'candidate.auth_required': 'Please read and accept the Data Processing Authorization first',
+    'candidate.name_required': 'Please fill in the candidate name',
     'candidate.jd_not_confirmed': 'The JD of this position is not confirmed yet, so no candidate can be uploaded',
     'candidate.not_confirmed': 'Please fill in the candidate name before confirming',
     'candidate.already_confirmed': 'This candidate is already confirmed',

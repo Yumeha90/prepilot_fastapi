@@ -175,7 +175,7 @@ export async function resumePosition(id: number): Promise<PositionDetail> {
   return data
 }
 
-/** JD 版本历史接口由 P18 直接调用（后端保留，前端本期不展示历史列表）：
+/** JD 版本历史接口由人岗匹配详情页直接调用（后端保留，前端本期不展示历史列表）：
  *  GET /positions/{id}/jd/versions        列表（倒序）
  *  GET /positions/{id}/jd/versions/{v}    某版只读快照
  */

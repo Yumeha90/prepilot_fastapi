@@ -90,13 +90,13 @@ export async function createCandidate(payload: {
   return data
 }
 
-/** 确认解析结果（BR-04 / BR-11）：确认后才允许进入流程 */
+/** 确认解析结果：确认后才允许进入流程 */
 export async function confirmCandidate(id: number, profile: ResumeProfile): Promise<CandidateDetail> {
   const { data } = await apiClient.post<CandidateDetail>(`${BASE}/${id}/confirm`, { profile })
   return data
 }
 
-/** 对已上传候选人重新解析（不落库，供 P05 刷新右栏） */
+/** 对已上传候选人重新解析（不落库，供解析页刷新右栏） */
 export async function reparseCandidate(id: number): Promise<ParseResultLike> {
   const { data } = await apiClient.post<ParseResultLike>(`${BASE}/${id}/parse`)
   return data

@@ -106,8 +106,8 @@ export default {
   candidate: {
     listTitle: '候选人',
     uploadResume: '上传简历',
-    uploadTitle: '上传简历（P04）',
-    parseTitle: '简历解析确认（P05）',
+    uploadTitle: '上传简历',
+    parseTitle: '简历解析确认',
     name: '姓名',
     namePlaceholder: '候选人姓名（可从简历中自动识别）',
     email: '邮箱',
@@ -126,9 +126,9 @@ export default {
     },
     action: {
       goParse: '去解析确认',
+      viewResume: '查看简历',
     },
-    // P04 上传
-    positionRequired: '应聘职位（必选）',
+    // 上传页
     positionPlaceholder: '请选择该候选人应聘的职位',
     noSelectablePosition: '没有可选职位（职位 JD 需先确认）',
     authRequiredHint: '必须先勾选《数据处理授权》才能上传简历',
@@ -146,9 +146,10 @@ export default {
     orPaste: '或手动粘贴简历全文',
     pastePlaceholder: '把简历内容粘贴到这里（用于扫描件或文件上传失败时的兜底）',
     nextStep: '下一步：解析简历',
-    submitHint: '需选择职位、填写邮箱、勾选授权，并提供简历内容（≥30 字）',
-    // P05 解析确认
+    submitHint: '需选择职位、填写姓名与邮箱、勾选授权，并提供简历内容（≥30 字）',
+    // 解析确认页
     resumeOriginal: '简历原文',
+    noProfile: '尚未解析，暂无结构化档案',
     reparse: '重新解析',
     lowConfidence: '建议核对',
     section: {
@@ -337,6 +338,7 @@ export default {
     'candidate.email_taken': '邮箱格式不正确',
     'candidate.already_applied': '该候选人已投递过职位，本期不支持一人投递多个职位',
     'candidate.auth_required': '请先阅读并勾选《数据处理授权》',
+    'candidate.name_required': '请填写候选人姓名',
     'candidate.jd_not_confirmed': '该职位的 JD 尚未确认，无法上传候选人',
     'candidate.not_confirmed': '请先补全候选人姓名再确认',
     'candidate.already_confirmed': '该候选人已确认，无需重复操作',

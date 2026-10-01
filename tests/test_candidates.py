@@ -190,10 +190,20 @@ async def _scenario_upload_parse_confirm() -> None:
         assert denied.status_code == 400
         assert denied.json()["detail"]["code"] == "candidate.auth_required"
 
-        # 2) D14 邮箱必填（空串）→ 拦截
+        # 2) 姓名必填（空）→ 拦截
+        no_name = await client.post(
+            "/api/candidates",
+            json={"position_id": pid, "contact_email": "nobody@example.com",
+                  "raw_text": RESUME, "auth_tick": True},
+            headers=headers,
+        )
+        assert no_name.status_code == 400
+        assert no_name.json()["detail"]["code"] == "candidate.name_required"
+
+        # 2b) D14 邮箱格式不合法 → 拦截
         bad_mail = await client.post(
             "/api/candidates",
-            json={"position_id": pid, "contact_email": "not-an-email",
+            json={"position_id": pid, "name": "张三", "contact_email": "not-an-email",
                   "raw_text": RESUME, "auth_tick": True},
             headers=headers,
         )
@@ -226,7 +236,7 @@ async def _scenario_upload_parse_confirm() -> None:
         # 4) D3 一人一职位：同邮箱再投 → 拦截
         dup = await client.post(
             "/api/candidates",
-            json={"position_id": pid, "contact_email": mail,
+            json={"position_id": pid, "name": "张三", "contact_email": mail,
                   "raw_text": RESUME, "auth_tick": True},
             headers=headers,
         )

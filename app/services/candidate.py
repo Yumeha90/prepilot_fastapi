@@ -99,6 +99,11 @@ async def create_candidate(
             ErrorCode.CANDIDATE_AUTH_REQUIRED, "请先阅读并勾选《数据处理授权》"
         )
 
+    # 姓名是列表与看板的主标识，不允许为空（也不再用邮箱前缀兜底）
+    name = (payload.name or "").strip()
+    if not name:
+        raise bad_request(ErrorCode.CANDIDATE_NAME_REQUIRED, "请填写候选人姓名")
+
     position = await db.get(Position, payload.position_id)
     if position is None:
         raise not_found("职位不存在")
@@ -131,9 +136,13 @@ async def create_candidate(
                 f"该候选人已投递过职位「{pos_name}」，本期不支持一人投递多个职位",
             )
         candidate = existing
+        # 复用旧候选人时补上本次填写的姓名与电话（旧值可能为空）
+        candidate.name = name
+        if (payload.contact_phone or "").strip():
+            candidate.contact_phone = payload.contact_phone.strip()
     else:
         candidate = Candidate(
-            name=(payload.name or "").strip() or (payload.contact_email or "").split("@")[0],
+            name=name,
             contact_email=email,
             contact_phone=(payload.contact_phone or "").strip(),
             source=payload.source,

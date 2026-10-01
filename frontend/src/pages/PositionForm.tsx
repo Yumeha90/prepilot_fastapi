@@ -62,7 +62,7 @@ const { Text, Title } = Typography
 const ROUND_TYPES: RoundType[] = ['r1', 'r2', 'hr', 'offer']
 
 function evenWeights(count: number): number[] {
-  // 按「5 的份数」分配再乘回 5：BR-20 要求权重步进 5，
+  // 按「5 的份数」分配再乘回 5：权重步进为 5，
   // 朴素的 100/count 在 3 项时会得到 34/33/33，保存会被校验拦下
   if (count <= 0) return []
   const units = 20

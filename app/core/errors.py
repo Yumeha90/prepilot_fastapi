@@ -55,6 +55,7 @@ class ErrorCode:
     CANDIDATE_ALREADY_APPLIED = "candidate.already_applied"
     CANDIDATE_AUTH_REQUIRED = "candidate.auth_required"
     CANDIDATE_JD_NOT_CONFIRMED = "candidate.jd_not_confirmed"
+    CANDIDATE_NAME_REQUIRED = "candidate.name_required"
     CANDIDATE_NOT_CONFIRMED = "candidate.not_confirmed"
     CANDIDATE_ALREADY_CONFIRMED = "candidate.already_confirmed"
     RESUME_FILE_TOO_LARGE = "candidate.resume_file_too_large"

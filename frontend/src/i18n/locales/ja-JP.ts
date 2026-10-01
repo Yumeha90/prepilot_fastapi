@@ -109,8 +109,8 @@ export default {
   candidate: {
     listTitle: '候補者',
     uploadResume: '履歴書をアップロード',
-    uploadTitle: '履歴書アップロード（P04）',
-    parseTitle: '履歴書解析の確定（P05）',
+    uploadTitle: '履歴書アップロード',
+    parseTitle: '履歴書解析の確定',
     name: '氏名',
     namePlaceholder: '候補者名（履歴書から自動判定）',
     email: 'メール',
@@ -129,8 +129,9 @@ export default {
     },
     action: {
       goParse: '解析・確定へ',
+      viewResume: '履歴書を見る',
     },
-    positionRequired: '応募ポジション（必須）',
+    // アップロード画面
     positionPlaceholder: '応募するポジションを選択してください',
     noSelectablePosition: '選択できるポジションがありません（JD を先に確定してください）',
     authRequiredHint: 'アップロード前に「データ処理に関する同意」へのチェックが必須です',
@@ -148,8 +149,9 @@ export default {
     orPaste: 'または履歴書の全文を貼り付け',
     pastePlaceholder: 'ここに履歴書の内容を貼り付けてください（スキャンやアップロード失敗時の代替）',
     nextStep: '次へ：履歴書を解析',
-    submitHint: 'ポジション選択・メール入力・同意チェック・履歴書内容（30 文字以上）が必要です',
+    submitHint: 'ポジション選択・氏名とメール入力・同意チェック・履歴書内容（30 文字以上）が必要です',
     resumeOriginal: '履歴書原文',
+    noProfile: '未解析のため構造化データはありません',
     reparse: '再解析',
     lowConfidence: '要確認',
     section: {
@@ -332,6 +334,7 @@ export default {
     'candidate.email_taken': 'メールアドレスの形式が正しくありません',
     'candidate.already_applied': 'この候補者は既に応募済みです。複数職種への応募はサポートしていません',
     'candidate.auth_required': '先に「データ処理に関する同意」を確認し、チェックしてください',
+    'candidate.name_required': '候補者氏名を入力してください',
     'candidate.jd_not_confirmed': 'このポジションの JD は未確定のため、候補者を登録できません',
     'candidate.not_confirmed': '確定する前に候補者名を入力してください',
     'candidate.already_confirmed': 'この候補者は確定済みです',

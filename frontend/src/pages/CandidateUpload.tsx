@@ -1,14 +1,16 @@
 /**
- * P04 简历上传与授权（PRD 3.3.1 / §5.6）。
+ * 简历上传与授权页。
  *
  * 口径：
- * - D1 上传必须选职位，一步建候选人 + 应聘记录
- * - BR-09 未勾选《数据处理授权》拦截上传
- * - 职位下拉只列 JD 已确认的（否则 S4 没有权重可算）；
+ * - 上传必须选职位，一步建候选人 + 应聘记录
+ * - 未勾选《数据处理授权》拦截上传
+ * - 职位下拉只列 JD 已确认的（否则没有权重可算匹配分）；
  *   面试官可选范围天然收窄为被指派职位（后端数据范围已过滤）
- * - 文件抽取完即丢弃，不落库、不进 COS（D13）
+ * - 姓名 / 邮箱 / 手机号从简历原文自动回填，回填过的值用户可自由改，
+ *   改过之后不再被覆盖（见 utils/resumeBasic.ts）
+ * - 文件抽取完即丢弃，不落库、不进对象存储
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -37,6 +39,7 @@ import { fetchPositions } from '@/api/positions'
 import { extractErrorCode } from '@/api/client'
 import Forbidden from '@/pages/Forbidden'
 import { useAuthStore } from '@/store/auth'
+import { guessResumeBasic, type ResumeBasicGuess } from '@/utils/resumeBasic'
 
 const { Text, Title, Paragraph } = Typography
 
@@ -57,6 +60,23 @@ export default function CandidateUpload() {
   const [authTick, setAuthTick] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [extracting, setExtracting] = useState(false)
+
+  // 上一次自动回填的值：只覆盖"空的"或"上次自动填的"，用户手改过的一律保留
+  const autoRef = useRef<ResumeBasicGuess>({ name: '', email: '', phone: '' })
+
+  const applyGuess = (text: string) => {
+    if (text.trim().length < 10) return
+    const g = guessResumeBasic(text)
+    const a = autoRef.current
+    // cur 为空或仍等于上次回填值 → 采用新值；否则视为用户手改，不动
+    const merge = (cur: string, next: string, prevAuto: string) =>
+      !cur || cur === prevAuto ? next : cur
+
+    setName((cur) => merge(cur, g.name, a.name))
+    setEmail((cur) => merge(cur, g.email, a.email))
+    setPhone((cur) => merge(cur, g.phone, a.phone))
+    autoRef.current = g
+  }
 
   const errMsg = (error: unknown) => {
     const code = extractErrorCode(error)
@@ -98,6 +118,7 @@ export default function CandidateUpload() {
       const out = await extractResume(file)
       setRawText(out.text)
       setFileName(out.filename)
+      applyGuess(out.text)
       message.success(t('candidate.msg.extracted', { n: out.text.length }))
     } catch (e) {
       message.error(errMsg(e))
@@ -107,7 +128,13 @@ export default function CandidateUpload() {
     return false // 阻止 antd 默认上传行为
   }
 
-  const canSubmit = Boolean(positionId) && authTick && rawText.trim().length >= 30 && email.trim()
+  // 简历内容（≥30 字）与授权是硬门槛；职位、姓名、邮箱缺一不可
+  const canSubmit =
+    Boolean(positionId) &&
+    Boolean(name.trim()) &&
+    Boolean(email.trim()) &&
+    rawText.trim().length >= 30 &&
+    authTick
 
   if (!canUpload) return <Forbidden />
 
@@ -128,7 +155,9 @@ export default function CandidateUpload() {
 
       <Row gutter={16}>
         <Col span={12}>
-          <Text strong>{t('candidate.positionRequired')}</Text>
+          <Text strong>
+            {t('candidate.position')} <Text type="danger">*</Text>
+          </Text>
           <Select
             style={{ width: '100%', marginTop: 8 }}
             loading={posLoading}
@@ -145,7 +174,9 @@ export default function CandidateUpload() {
 
       <Row gutter={16}>
         <Col span={8}>
-          <Text type="secondary">{t('candidate.name')}</Text>
+          <Text type="secondary">
+            {t('candidate.name')} <Text type="danger">*</Text>
+          </Text>
           <Input
             style={{ marginTop: 8 }}
             value={name}
@@ -202,6 +233,7 @@ export default function CandidateUpload() {
         onChange={(e) => {
           setRawText(e.target.value)
           setFileName('')
+          applyGuess(e.target.value)
         }}
         placeholder={t('candidate.pastePlaceholder')}
       />

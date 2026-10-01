@@ -1,20 +1,26 @@
 /**
- * 候选人列表（PRD 3.3，S1 阶段的简版，便于自测）。
+ * 候选人列表（按条件检索的补充视图）。
  *
- * S3 落地看板 P08 后，主入口会变成看板，本页保留为「按条件检索」的补充视图。
+ * 看板落地后主入口会变成看板，本页保留为「按条件检索」的补充视图。
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Card, Input, Select, Space, Table, Tag, Typography } from 'antd'
+import { Button, Card, Descriptions, Divider, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined } from '@ant-design/icons'
 
-import { fetchCandidates, type CandidateItem, type ProfileStatus } from '@/api/candidates'
+import {
+  fetchCandidate,
+  fetchCandidates,
+  type CandidateItem,
+  type ProfileStatus,
+} from '@/api/candidates'
 import { useAuthStore } from '@/store/auth'
+import type { ResumeProfile } from '@/api/resume'
 
-const { Text } = Typography
+const { Text, Paragraph } = Typography
 
 const STATUS_COLOR: Record<ProfileStatus, string> = {
   uploading: 'default',
@@ -33,6 +39,7 @@ export default function Candidates() {
   const [status, setStatus] = useState<ProfileStatus | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [viewId, setViewId] = useState<number | null>(null)
 
   const resetPage = <T,>(setter: (v: T) => void) => (v: T) => {
     setter(v)
@@ -44,6 +51,14 @@ export default function Candidates() {
     queryFn: () =>
       fetchCandidates({ keyword: keyword || undefined, status, page, page_size: pageSize }),
   })
+
+  // 列表是简版，点「查看简历」才拉档案原文
+  const { data: detail, isLoading: detailLoading } = useQuery({
+    queryKey: ['candidate', viewId],
+    queryFn: () => fetchCandidate(viewId as number),
+    enabled: viewId !== null,
+  })
+  const profile = (detail?.parsed_profile ?? null) as ResumeProfile | null
 
   const columns: ColumnsType<CandidateItem> = [
     { title: t('candidate.name'), dataIndex: 'name', width: 120 },
@@ -62,17 +77,27 @@ export default function Candidates() {
     {
       title: t('position.actions'),
       key: 'actions',
-      width: 160,
-      render: (_, row) =>
-        row.profile_status === 'confirmed' ? null : (
-          <Button
-            type="link"
-            size="small"
-            onClick={() => navigate(`/candidates/${row.id}/parse`)}
-          >
-            {t('candidate.action.goParse')}
-          </Button>
-        ),
+      width: 180,
+      render: (_, row) => {
+        // 已粉碎的只剩归档记录，简历内容已清空，无可操作
+        if (row.profile_status === 'archived') return <Text type="secondary">—</Text>
+        return (
+          <Space size={0}>
+            {row.profile_status !== 'confirmed' && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => navigate(`/candidates/${row.id}/parse`)}
+              >
+                {t('candidate.action.goParse')}
+              </Button>
+            )}
+            <Button type="link" size="small" onClick={() => setViewId(row.id)}>
+              {t('candidate.action.viewResume')}
+            </Button>
+          </Space>
+        )
+      },
     },
   ]
 
@@ -127,6 +152,75 @@ export default function Candidates() {
         }}
         locale={{ emptyText: t('common.noData') }}
       />
+
+      <Modal
+        open={viewId !== null}
+        title={t('candidate.action.viewResume')}
+        width={720}
+        loading={detailLoading}
+        onCancel={() => setViewId(null)}
+        footer={
+          <Button onClick={() => setViewId(null)}>{t('common.ok')}</Button>
+        }
+      >
+        {detail && (
+          <>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label={t('candidate.name')}>{detail.name}</Descriptions.Item>
+              <Descriptions.Item label={t('candidate.email')}>
+                {detail.contact_email}
+              </Descriptions.Item>
+              <Descriptions.Item label={t('candidate.phone')}>
+                {detail.contact_phone || '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={t('candidate.position')}>
+                {detail.applications?.[0]?.position_name || '—'}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Divider orientation="left" plain>
+              {t('candidate.resumeOriginal')}
+            </Divider>
+            <Paragraph
+              style={{
+                maxHeight: 320,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                background: '#fafafa',
+                padding: 12,
+                borderRadius: 4,
+              }}
+            >
+              {detail.resume_raw_text || '—'}
+            </Paragraph>
+
+            {profile && (
+              <>
+                <Divider orientation="left" plain>
+                  {t('candidate.section.skills')}
+                </Divider>
+                {profile.skills?.length ? (
+                  <Space wrap>
+                    {profile.skills.map((s) => (
+                      <Tag key={s}>{s}</Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  <Text type="secondary">—</Text>
+                )}
+              </>
+            )}
+            {!profile && (
+              <>
+                <Divider orientation="left" plain>
+                  {t('candidate.section.skills')}
+                </Divider>
+                <Text type="secondary">{t('candidate.noProfile')}</Text>
+              </>
+            )}
+          </>
+        )}
+      </Modal>
     </Card>
   )
 }
