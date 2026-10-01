@@ -12,6 +12,10 @@ export interface BoardCard {
   interviewer_name: string
   /** 当轮进展：会话状态；无会话（待派单 / offer 列）为空 */
   session_status: string
+  /** 当轮会话 id：「开始备面」直接进工作台要它；无会话为 null */
+  session_id: number | null
+  /** 能否进工作台备面：只有被指派给本人的面试官 + 会话未提交（后端判定） */
+  can_prepare: boolean
   profile_status: string
   /** 最新人岗匹配分；未计算 / 未参与计算时为 null */
   match_score: number | null

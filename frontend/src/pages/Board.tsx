@@ -270,6 +270,15 @@ export default function Board() {
                         >
                           {t('candidate.action.viewResume')}
                         </Button>
+                        {card.can_prepare && card.session_id && (
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => void navigate(`/workbench/${card.session_id}`)}
+                          >
+                            {t('candidate.action.prepare')}
+                          </Button>
+                        )}
                         {canMatch && (
                           <Button
                             type="link"

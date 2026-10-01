@@ -26,6 +26,8 @@ import CandidateUpload from '@/pages/CandidateUpload'
 import CandidateParse from '@/pages/CandidateParse'
 import MatchDetail from '@/pages/MatchDetail'
 import Lifecycle from '@/pages/Lifecycle'
+import WorkbenchList from '@/pages/WorkbenchList'
+import Workbench from '@/pages/Workbench'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
@@ -38,7 +40,9 @@ const protectedRoutes: RouteObject[] = [
   { path: 'candidates/:id/parse', element: <CandidateParse /> },
   // P18 人岗匹配：按 application 定位（一人一职位下与候选人一一对应）
   { path: 'candidates/:aid/match', element: <MatchDetail /> },
-  { path: 'workbench', element: <Placeholder /> },
+  // 3.4 AI 备面工作台：会话列表 + Step1 策略与矩阵（P09）
+  { path: 'workbench', element: <WorkbenchList /> },
+  { path: 'workbench/:sessionId', element: <Workbench /> },
   { path: 'evaluations', element: <Placeholder /> },
   { path: 'matches', element: <Placeholder /> },
   { path: 'system/roles', element: <Roles /> },

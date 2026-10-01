@@ -26,7 +26,12 @@ from app.core.errors import ErrorCode, bad_request, forbidden, not_found
 from app.models.candidate import CONFIRMED, PENDING, Application, Candidate
 from app.models.match_score import CURRENT, MatchScore
 from app.models.position import Position, PositionRound
-from app.models.session import NON_INTERVIEW_ROUNDS, ROUND_STAGE, InterviewSession
+from app.models.session import (
+    NON_INTERVIEW_ROUNDS,
+    ROUND_STAGE,
+    SUBMITTED,
+    InterviewSession,
+)
 from app.models.user import User
 from app.schemas.board import BoardCard, BoardColumn, BoardOut
 from app.services import candidate as candidate_svc
@@ -164,6 +169,8 @@ async def board_data(
                 current_round_name=(sess.round_name if sess else (rnd.name if rnd else "")),
                 interviewer_name=interviewer,
                 session_status=sess.status if sess else "",
+                session_id=sess.id if sess else None,
+                can_prepare=_can_prepare(user, sess),
                 profile_status=cand.profile_status if cand else "",
                 match_score=float(scores[a.id].score) if a.id in scores else None,
                 match_tier=scores[a.id].tier if a.id in scores else "",
@@ -176,6 +183,15 @@ async def board_data(
         summary=summary,
         actions=available_actions(user),
     )
+
+
+def _can_prepare(user: User, sess: InterviewSession | None) -> bool:
+    """「开始备面」入口：被指派给本人的面试官 + 会话未提交（PRD §5.8）。
+
+    只看 interviewer_id，不看权限码 —— 权限码决定能不能进 /workbench（路由层已拦），
+    这里回答的是「这张卡片的会话是不是你的」。已提交的会话只能回看面评，不再备面。
+    """
+    return sess is not None and sess.interviewer_id == user.id and sess.status != SUBMITTED
 
 
 async def _scopes(db: AsyncSession, user: User) -> dict[str, str]:

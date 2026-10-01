@@ -31,6 +31,11 @@ class BoardCard(BaseModel):
     interviewer_name: str = ""
     # 当轮进展：会话状态 s1_draft…s5_draft / submitted；无会话（pending、offer 列）为空
     session_status: str = ""
+    # 当轮会话 id：卡片「开始备面」直接进入工作台要它（无会话为 None）
+    session_id: int | None = None
+    # 能否「开始备面」：只有被指派给本人的面试官、且会话未提交（PRD §5.8）。
+    # 由后端判定而非前端——否则 HR 改个 JS 就能给别人的会话写面评
+    can_prepare: bool = False
     # 简历侧状态：uploading / parsed / confirmed / archived（卡片上提示"待确认"）
     profile_status: str = ""
     # 最新人岗匹配分（BR-21 只显示分，解释在 P18）：无分 / 未参与计算时为 None

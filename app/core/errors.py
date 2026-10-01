@@ -90,6 +90,17 @@ class ErrorCode:
     LIFECYCLE_CONFIRM_REQUIRED = "lifecycle.confirm_required"
     LIFECYCLE_NOTHING_SELECTED = "lifecycle.nothing_selected"
 
+    # AI 备面工作台（PRD 3.4）
+    # 只有被指派的面试官能写；HR / HR 主管进来看可以，改不行
+    WORKBENCH_READ_ONLY = "workbench.read_only"
+    # 会话已提交：连面试官本人都只能回看
+    WORKBENCH_SUBMITTED = "workbench.submitted"
+    # 矩阵生成的前置：职位 JD 未确认 / 候选人简历已粉碎或为空，没有可对齐的材料
+    WORKBENCH_NO_JD = "workbench.no_jd"
+    WORKBENCH_NO_RESUME = "workbench.no_resume"
+    WORKBENCH_MATRIX_INVALID = "workbench.matrix_invalid"
+    WORKBENCH_DURATION_INVALID = "workbench.duration_invalid"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

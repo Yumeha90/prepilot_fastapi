@@ -31,6 +31,7 @@ from app.routers import (
     resume,
     sessions,
     users,
+    workbench,
 )
 
 settings = get_settings()
@@ -88,6 +89,8 @@ def create_app() -> FastAPI:
     app.include_router(match.router, prefix=settings.API_PREFIX)
     # 3.5 数据生命周期 P15（BR-10 90 天粉碎：策略 + 手动粉碎 + 定时扫描）
     app.include_router(lifecycle.router, prefix=settings.API_PREFIX)
+    # 3.4 AI 备面工作台（Step1 矩阵 P09；后续 Step 随各自阶段加）
+    app.include_router(workbench.router, prefix=settings.API_PREFIX)
     return app
 
 

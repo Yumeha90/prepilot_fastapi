@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -38,6 +39,23 @@ ROUND_STAGE = {
 
 # Offer 轮是终结处置节点，不是面试（PRD 3.2）：不产生面评、不进工作台
 NON_INTERVIEW_ROUNDS = ("offer",)
+
+# 本轮默认时长（分钟）—— P09 顶部信息条可改，改的是会话不是职位
+DEFAULT_DURATION_MINUTES = 45
+MIN_DURATION_MINUTES = 10
+MAX_DURATION_MINUTES = 240
+
+# 矩阵行的证据状态（PRD §3.4.1：证据充足 / 待核实 / 缺失）
+EVIDENCE_SUFFICIENT = "sufficient"
+EVIDENCE_VERIFY = "verify"
+EVIDENCE_MISSING = "missing"
+EVIDENCE_STATUSES = (EVIDENCE_SUFFICIENT, EVIDENCE_VERIFY, EVIDENCE_MISSING)
+
+# 矩阵行的来源：JD 核心能力 / AI 从简历补充 / 面试官手动新增
+ROW_SOURCE_JD = "jd"
+ROW_SOURCE_RESUME = "resume"
+ROW_SOURCE_MANUAL = "manual"
+ROW_SOURCES = (ROW_SOURCE_JD, ROW_SOURCE_RESUME, ROW_SOURCE_MANUAL)
 
 
 class InterviewSession(Base):
@@ -64,6 +82,19 @@ class InterviewSession(Base):
     )
     status: Mapped[str] = mapped_column(String(16), default=S1_DRAFT, nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # ---- 3.4 工作台产物（逐阶段加：Step1 矩阵 → Step2 问题链 → …）----
+    # 本轮时长（分钟）：同一职位一面 / 二面时长不同，且与轮次快照同源，
+    # 派单那一刻定下来，流程后续改动不追溯
+    duration_minutes: Mapped[int] = mapped_column(
+        Integer, default=DEFAULT_DURATION_MINUTES, nullable=False
+    )
+    # Step1 能力-证据矩阵整块（结构见 migrations/009_workbench.sql 注释）
+    matrix_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 每次生成 / 保存 +1，用于前端判断「本地编辑是否落后于服务端」
+    matrix_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    matrix_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
