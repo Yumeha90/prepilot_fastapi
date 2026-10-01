@@ -64,6 +64,15 @@ class ErrorCode:
     RESUME_TEXT_TOO_SHORT = "candidate.resume_text_too_short"
     RESUME_TOO_LONG = "candidate.resume_too_long"
 
+    # 派单与会话（PRD 3.3 第二段 / 3.4）
+    SESSION_NOT_FOUND = "session.not_found"
+    SESSION_FORBIDDEN = "session.forbidden"
+    # 职位还没配面试轮次（只有 offer 轮也算没配）：派单无从下手
+    SESSION_NO_ROUND = "session.no_round"
+    # 轮次存在却没有面试官：PRD 3.2 已收紧为矛盾状态，这里是防御性兜底
+    SESSION_NO_INTERVIEWER = "session.no_interviewer"
+    SESSION_ALREADY_DISPATCHED = "session.already_dispatched"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

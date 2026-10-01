@@ -29,6 +29,19 @@ const STATUS_COLOR: Record<ProfileStatus, string> = {
   archived: 'default',
 }
 
+// 流程侧阶段：pending 待派单 / in_* 进行中 / accepted-rejected-pool-archived 终态
+const STAGE_COLOR: Record<string, string> = {
+  pending: 'default',
+  in_r1: 'processing',
+  in_r2: 'processing',
+  in_hr: 'processing',
+  in_offer: 'warning',
+  accepted: 'success',
+  rejected: 'error',
+  in_pool: 'default',
+  archived: 'default',
+}
+
 export default function Candidates() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -71,8 +84,20 @@ export default function Candidates() {
         <Tag color={STATUS_COLOR[v] ?? 'default'}>{t(`candidate.status.${v}`)}</Tag>
       ),
     },
-    { title: t('candidate.position'), dataIndex: 'position_name', width: 180 },
-    { title: t('candidate.stage'), dataIndex: 'stage', width: 100 },
+    { title: t('candidate.position'), dataIndex: 'position_name', width: 160 },
+    {
+      title: t('candidate.stage'),
+      dataIndex: 'stage',
+      width: 100,
+      render: (v: string) =>
+        v ? <Tag color={STAGE_COLOR[v] ?? 'default'}>{t(`candidate.stageName.${v}`)}</Tag> : '—',
+    },
+    {
+      title: t('candidate.interviewer'),
+      dataIndex: 'interviewer_name',
+      width: 110,
+      render: (v: string) => v || <Text type="secondary">—</Text>,
+    },
     { title: t('candidate.createdBy'), dataIndex: 'created_by_name', width: 120 },
     {
       title: t('position.actions'),
@@ -175,6 +200,14 @@ export default function Candidates() {
               </Descriptions.Item>
               <Descriptions.Item label={t('candidate.position')}>
                 {detail.applications?.[0]?.position_name || '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={t('candidate.stage')}>
+                {detail.applications?.[0]?.stage
+                  ? t(`candidate.stageName.${detail.applications[0].stage}`)
+                  : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={t('candidate.interviewer')}>
+                {detail.applications?.[0]?.interviewer_name || '—'}
               </Descriptions.Item>
             </Descriptions>
 

@@ -89,8 +89,21 @@ export default function CandidateParse() {
 
   const confirmMut = useMutation({
     mutationFn: () => confirmCandidate(candidateId, profile),
-    onSuccess: () => {
-      message.success(t('candidate.msg.confirmed'))
+    onSuccess: (d) => {
+      // D5 确认即派单：派单成不成都要说清楚，否则 HR 以为流程已经走了
+      const app = d.applications?.[0]
+      if (d.dispatch_notice) {
+        message.warning(t('candidate.msg.dispatchFailed', { reason: d.dispatch_notice }))
+      } else if (app?.interviewer_name) {
+        message.success(
+          t('candidate.msg.dispatched', {
+            name: app.interviewer_name,
+            round: app.current_round_name || '',
+          }),
+        )
+      } else {
+        message.success(t('candidate.msg.confirmed'))
+      }
       navigate('/candidates')
     },
     onError: (e) => message.error(errMsg(e)),

@@ -13,6 +13,7 @@ from app.core.deps import get_db, require_any_perm, require_perm
 from app.core.errors import ErrorCode, bad_request
 from app.models.candidate import Candidate
 from app.models.position import Position
+from app.models.session import InterviewSession
 from app.models.user import User
 from app.schemas.candidate import (
     CandidateConfirmIn,
@@ -21,6 +22,7 @@ from app.schemas.candidate import (
     CandidatePaged,
 )
 from app.schemas.candidate import ApplicationOut, CandidateListItem
+from app.schemas.session import SessionOut
 from app.services import candidate as svc
 from app.services import resume_ai
 
@@ -43,9 +45,71 @@ async def _user_name(db: AsyncSession, user_id: int | None) -> str:
     return user.full_name if user else ""
 
 
-async def _out(db: AsyncSession, c: Candidate) -> CandidateOut:
+async def _sessions_of(db: AsyncSession, candidate_id: int) -> list[SessionOut]:
+    """该候选人的全部会话（含面试官 / 职位 / 轮次快照）。"""
+    rows = await db.scalars(
+        select(InterviewSession)
+        .where(InterviewSession.candidate_id == candidate_id)
+        .order_by(InterviewSession.id)
+    )
+    sessions = list(rows)
+    if not sessions:
+        return []
+
+    names = await _position_names(db, {s.position_id for s in sessions})
+    users = await _user_names(db, {s.interviewer_id for s in sessions})
+    return [
+        SessionOut(
+            id=s.id,
+            application_id=s.application_id,
+            candidate_id=s.candidate_id,
+            candidate_name=s.candidate.name if s.candidate else "",
+            position_id=s.position_id,
+            position_name=names.get(s.position_id, ""),
+            round_id=s.round_id,
+            round_type=s.round_type,
+            round_name=s.round_name,
+            interviewer_id=s.interviewer_id,
+            interviewer_name=users.get(s.interviewer_id, ""),
+            status=s.status,
+            submitted_at=s.submitted_at,
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+        )
+        for s in sessions
+    ]
+
+
+async def _user_names(db: AsyncSession, ids: set[int]) -> dict[int, str]:
+    if not ids:
+        return {}
+    rows = await db.execute(select(User.id, User.full_name).where(User.id.in_(ids)))
+    return {r[0]: r[1] for r in rows.all()}
+
+
+async def _out(db: AsyncSession, c: Candidate, dispatch_notice: str = "") -> CandidateOut:
     apps = list(c.applications or [])
     names = await _position_names(db, {a.position_id for a in apps})
+    sessions = await _sessions_of(db, c.id)
+
+    # 每条应聘记录的「当前轮次 / 面试官」：优先取库里已派的单
+    app_outs: list[ApplicationOut] = []
+    for a in apps:
+        mine = [s for s in sessions if s.application_id == a.id]
+        current = mine[-1] if mine else None
+        app_outs.append(
+            ApplicationOut(
+                id=a.id,
+                candidate_id=a.candidate_id,
+                position_id=a.position_id,
+                position_name=names.get(a.position_id, ""),
+                stage=a.stage,
+                current_round_name=current.round_name or current.round_type if current else "",
+                interviewer_name=current.interviewer_name if current else "",
+                created_at=a.created_at,
+            )
+        )
+
     return CandidateOut(
         id=c.id,
         name=c.name,
@@ -64,17 +128,9 @@ async def _out(db: AsyncSession, c: Candidate) -> CandidateOut:
         created_by_name=await _user_name(db, c.created_by),
         created_at=c.created_at,
         updated_at=c.updated_at,
-        applications=[
-            ApplicationOut(
-                id=a.id,
-                candidate_id=a.candidate_id,
-                position_id=a.position_id,
-                position_name=names.get(a.position_id, ""),
-                stage=a.stage,
-                created_at=a.created_at,
-            )
-            for a in apps
-        ],
+        applications=app_outs,
+        sessions=sessions,
+        dispatch_notice=dispatch_notice,
     )
 
 
@@ -118,6 +174,11 @@ async def list_candidates(
         if app is not None:
             pos = await db.get(Position, app.position_id)
             pos_name = pos.name if pos else ""
+        interviewer_name = ""
+        if app is not None:
+            sessions = await _sessions_of(db, c.id)
+            mine = [s for s in sessions if s.application_id == app.id]
+            interviewer_name = mine[-1].interviewer_name if mine else ""
         items.append(
             CandidateListItem(
                 id=c.id,
@@ -127,6 +188,7 @@ async def list_candidates(
                 position_id=app.position_id if app else None,
                 position_name=pos_name,
                 stage=app.stage if app else "",
+                interviewer_name=interviewer_name,
                 created_by_name=await _user_name(db, c.created_by),
                 created_at=c.created_at,
                 updated_at=c.updated_at,
@@ -153,16 +215,17 @@ async def confirm_candidate(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_perm("candidate:upload_resume")),
 ) -> CandidateOut:
-    """确认解析结果（BR-04 / BR-11）。
+    """确认解析结果：确认后自动派单到首轮并建会话（D5）。
 
-    本阶段只写档案，确认后停在 `pending`；S2 接派单、S4 接首次算分。
+    派单失败不会让确认失败（确认已经生效），只在 `dispatch_notice` 里回原因，
+    前端提示 HR 去补齐流程配置。
     """
     candidate = await svc.get_candidate(db, candidate_id)
     await svc.ensure_can_view(db, user, candidate)
     if not candidate.resume_raw_text:
         raise bad_request(ErrorCode.CANDIDATE_NOT_CONFIRMED, "简历内容为空，无法确认")
-    updated = await svc.confirm_candidate(db, user, candidate, payload.profile)
-    return await _out(db, updated)
+    updated, notice = await svc.confirm_candidate(db, user, candidate, payload.profile)
+    return await _out(db, updated, notice)
 
 
 @router.post("/{candidate_id}/parse", response_model=dict)

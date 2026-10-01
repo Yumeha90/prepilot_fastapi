@@ -13,7 +13,28 @@ export interface ApplicationItem {
   position_id: number
   position_name: string
   stage: string
+  current_round_name: string
+  interviewer_name: string
   created_at: string
+}
+
+/** 面试会话（派单产物，详情里带出来） */
+export interface SessionItem {
+  id: number
+  application_id: number
+  candidate_id: number
+  candidate_name: string
+  position_id: number
+  position_name: string
+  round_id: number
+  round_type: string
+  round_name: string
+  interviewer_id: number
+  interviewer_name: string
+  status: string
+  submitted_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface CandidateDetail {
@@ -35,6 +56,9 @@ export interface CandidateDetail {
   created_at: string
   updated_at: string
   applications: ApplicationItem[]
+  sessions: SessionItem[]
+  /** 确认后派单失败的原因（正常派单为空字符串） */
+  dispatch_notice: string
 }
 
 export interface CandidateItem {
@@ -45,6 +69,7 @@ export interface CandidateItem {
   position_id: number | null
   position_name: string
   stage: string
+  interviewer_name: string
   created_by_name: string
   created_at: string
   updated_at: string

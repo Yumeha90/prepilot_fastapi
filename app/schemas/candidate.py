@@ -31,12 +31,18 @@ class ResumeParseOut(BaseModel):
 # ---------- 应聘记录 ----------
 
 
+from app.schemas.session import SessionOut
+
+
 class ApplicationOut(BaseModel):
     id: int
     candidate_id: int
     position_id: int
     position_name: str = ""
     stage: str
+    # 派单后写入：当前所在轮次与面试官（未派单则为空）
+    current_round_name: str = ""
+    interviewer_name: str = ""
     created_at: datetime
 
 
@@ -85,6 +91,10 @@ class CandidateOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     applications: list[ApplicationOut] = Field(default_factory=list)
+    sessions: list[SessionOut] = Field(default_factory=list)
+    # 确认后自动派单失败时的提示（正常派单为空）。
+    # 确认本身已经成功，这里只说明「为什么还停在待派单」
+    dispatch_notice: str = ""
 
 
 class CandidateListItem(BaseModel):
@@ -96,6 +106,8 @@ class CandidateListItem(BaseModel):
     position_id: int | None = None
     position_name: str = ""
     stage: str = ""
+    # 已派单后的当前面试官（未派单为空）
+    interviewer_name: str = ""
     created_by_name: str = ""
     created_at: datetime
     updated_at: datetime

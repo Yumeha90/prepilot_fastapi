@@ -1,14 +1,15 @@
-"""候选人服务（PRD 3.3 第一段：上传 → 解析 → 确认）。
+"""候选人服务（PRD 3.3：上传 → 解析 → 确认 → 派单）。
 
-本阶段不做派单、看板、匹配分、粉碎 —— 确认后停在 `application.stage=pending`，
-这本来就是看板的一列（P08 §3.3.3），是合法中间态，S2 再接派单。
+D5 确认即派单：确认写档案后立刻按流程配置派到首轮面试官并建会话（见 confirm_candidate）。
+派单失败不回滚确认，候选人停在 `pending` 等配置补齐。
 
 两条本期唯一约束：
 - D3 一人一职位：同邮箱候选人若已有任意 application 一律拦截
-- D1 上传必须选职位，且该职位 JD 必须已确认（否则 S4 没有权重可算）
+- D1 上传必须选职位，且该职位 JD 必须已确认（否则没有权重可算匹配分）
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -19,10 +20,13 @@ from app.core.errors import ErrorCode, bad_request, forbidden, not_found
 from app.models.candidate import CONFIRMED, PENDING, Candidate
 from app.models.candidate import Application
 from app.models.position import Position
+from app.models.session import InterviewSession
 from app.models.user import User
 from app.schemas.candidate import CandidateCreateIn
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -48,12 +52,21 @@ async def visible_candidate_ids(
     方案 a（2026-09-30 拍板）：面试官的数据范围是 `assigned`，但 D5 派单派的是
     **首轮**面试官 —— 若上传者是 r2 面试官，派单后他自己反而看不到了。
     因此这里额外放开 `created_by = 自己`，让上传者能跟踪自己提交的候选人。
-    （S2 派单落地后，本函数再追加「存在 interviewer_id = 自己 的 session」条件。）
+
+    S2 起再并上「存在 interviewer_id = 自己 的会话」：派给谁的面试，谁就能看到
+    这个候选人（否则面试官登录后列表是空的，等于派了个看不见的单）。
     """
     scope = scopes.get("candidate", "all")
     if scope == "all":
         return None
-    rows = await db.scalars(select(Candidate.id).where(Candidate.created_by == user.id))
+    assigned = select(InterviewSession.candidate_id).where(
+        InterviewSession.interviewer_id == user.id
+    )
+    rows = await db.scalars(
+        select(Candidate.id).where(
+            or_(Candidate.created_by == user.id, Candidate.id.in_(assigned))
+        )
+    )
     return list(set(rows))
 
 
@@ -176,10 +189,14 @@ async def create_candidate(
 
 async def confirm_candidate(
     db: AsyncSession, user: User, candidate: Candidate, profile: dict
-) -> Candidate:
-    """确认解析结果（BR-04 / BR-11）：只有确认后才允许进入流程。
+) -> tuple[Candidate, str]:
+    """确认解析结果并派单到首轮（D5）。
 
-    S2 会在这里挂钩派单，S4 挂钩首次算分 —— 本阶段只写档案。
+    返回 `(candidate, dispatch_notice)`：notice 非空表示派单没成（确认仍已生效），
+    由调用方提示 HR 去补齐流程配置。
+
+    **派单失败不回滚确认** —— 确认是已经完成的业务动作，回滚它是错的；
+    候选人停在 `pending`，等配置补齐后由看板的手动派单补上。
     """
     if candidate.profile_status == CONFIRMED:
         raise bad_request(ErrorCode.CANDIDATE_ALREADY_CONFIRMED, "该候选人已确认，无需重复操作")
@@ -203,7 +220,32 @@ async def confirm_candidate(
     candidate.updated_at = _now()
     await db.commit()
     await db.refresh(candidate)
-    return candidate
+
+    # D5 确认即派单：独立的一步，失败只记原因，不动已经落库的确认
+    from app.core.errors import AppError
+    from app.services import dispatch as dispatch_svc
+
+    notice = ""
+    try:
+        dispatched = False
+        for app in list(candidate.applications or []):
+            if app.stage == PENDING:
+                await dispatch_svc.dispatch_first_round(db, app)
+                dispatched = True
+        if dispatched:
+            await db.commit()
+    except AppError as exc:
+        # 失败路径上**不要再触发任何数据库 IO**：rollback / expire_all + refresh 都会让
+        # 连接在归还时炸 MissingGreenlet（SQLAlchemy 异步会话的老问题）。
+        # 反正派单这一步要么全成、要么一个字节都没写，不需要回滚。
+        notice = str(exc.detail.get("message", "派单失败"))
+        logger.warning("候选人 %s 确认后派单失败：%s", candidate.id, notice)
+
+    if notice:
+        # 派单没成就没有新数据要读回来，跳过 refresh（失败路径上少一次 IO 更稳）
+        return candidate, notice
+    await db.refresh(candidate)
+    return candidate, notice
 
 
 async def list_candidates(

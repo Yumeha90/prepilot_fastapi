@@ -17,7 +17,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.database import close_db, init_db
 from app.middleware.logging import RequestLogMiddleware
-from app.routers import admin, auth, candidates, health, jd, me, positions, resume, users
+from app.routers import (
+    admin,
+    auth,
+    candidates,
+    health,
+    jd,
+    me,
+    positions,
+    resume,
+    sessions,
+    users,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -67,6 +78,7 @@ def create_app() -> FastAPI:
     # 3.3 候选人：简历抽取 / 解析（/api/resume）与候选人 CRUD（/api/candidates）
     app.include_router(resume.router, prefix=settings.API_PREFIX)
     app.include_router(candidates.router, prefix=settings.API_PREFIX)
+    app.include_router(sessions.router, prefix=settings.API_PREFIX)
     return app
 
 
