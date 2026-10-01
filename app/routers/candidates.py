@@ -234,7 +234,13 @@ async def reparse_candidate(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_perm("candidate:upload_resume")),
 ) -> dict:
-    """对已上传的候选人重新解析（不落库，供 P05 刷新右栏）。"""
+    """对已上传的候选人重新解析，并把结果存成草稿（不推进流程）。
+
+    落草稿是为了不重复烧 token：云端一次解析 17~23s，若像早期那样「结果不落库」，
+    每进一次解析页就得重跑一遍。草稿由确认（confirm）转正，见 svc.save_parsed_profile。
+    """
     candidate = await svc.get_candidate(db, candidate_id)
     await svc.ensure_can_view(db, user, candidate)
-    return await resume_ai.parse_resume(candidate.resume_raw_text)
+    result = await resume_ai.parse_resume(candidate.resume_raw_text)
+    await svc.save_parsed_profile(db, candidate, result["profile"])
+    return result

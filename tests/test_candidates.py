@@ -243,7 +243,8 @@ async def _scenario_upload_parse_confirm() -> None:
         assert dup.status_code == 400
         assert dup.json()["detail"]["code"] == "candidate.already_applied"
 
-        # 5) AI 解析（打桩）：不落库，只返回
+        # 5) AI 解析（打桩）：/resume/parse 纯解析不落库；/candidates/{id}/parse
+        #    解析后落草稿（2026-10-01 口径：一次解析云端 17~23s，不能每次进页面重跑）
         async def stub(text: str):
             return resume_ai.ResumeStructure(
                 basic=resume_ai.ResumeBasic(name="张三", email=mail),
@@ -263,6 +264,14 @@ async def _scenario_upload_parse_confirm() -> None:
             reparse = await client.post(f"/api/candidates/{cid}/parse", headers=headers)
             assert reparse.status_code == 200
             assert reparse.json()["profile"]["skills"] == ["Go", "MySQL"]
+
+            # 草稿已落库：详情能读回来，状态是 parsed（未确认，不推进流程）
+            detail = await client.get(f"/api/candidates/{cid}", headers=headers)
+            assert detail.status_code == 200
+            assert detail.json()["profile_status"] == "parsed"
+            assert detail.json()["parsed_profile"]["skills"] == ["Go", "MySQL"]
+            assert detail.json()["confirmed_at"] is None
+            assert detail.json()["applications"][0]["stage"] == "pending"
         finally:
             mod._call = original
 
@@ -287,7 +296,7 @@ async def _scenario_upload_parse_confirm() -> None:
         assert ok.json()["confirmed_at"]
         assert ok.json()["parsed_profile"]["basic"]["name"] == "张三"
 
-        # 8) 重复确认 → 拦截
+        # 8) 重复确认 → 拦截；已确认的档案不允许被重新解析覆盖
         again = await client.post(
             f"/api/candidates/{cid}/confirm",
             json={"profile": {"basic": {"name": "张三"}}},
@@ -295,6 +304,22 @@ async def _scenario_upload_parse_confirm() -> None:
         )
         assert again.status_code == 400
         assert again.json()["detail"]["code"] == "candidate.already_confirmed"
+
+        import app.services.resume_ai as mod2
+
+        async def stub2(text: str):
+            return resume_ai.ResumeStructure(
+                basic=resume_ai.ResumeBasic(name="张三", email=mail), skills=["Go"]
+            )
+
+        original2 = mod2._call
+        mod2._call = stub2
+        try:
+            locked = await client.post(f"/api/candidates/{cid}/parse", headers=headers)
+        finally:
+            mod2._call = original2
+        assert locked.status_code == 400
+        assert locked.json()["detail"]["code"] == "candidate.already_confirmed"
 
         # 9) 列表能查到，且带上职位与阶段
         # S2 起确认即派单：流程配置齐全 → 推进到首轮；没配流程 → 停在 pending 并给出原因

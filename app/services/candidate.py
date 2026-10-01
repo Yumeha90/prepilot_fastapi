@@ -17,7 +17,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ErrorCode, bad_request, forbidden, not_found
-from app.models.candidate import CONFIRMED, PENDING, Candidate
+from app.models.candidate import CONFIRMED, PARSED, PENDING, Candidate
 from app.models.candidate import Application
 from app.models.position import Position
 from app.models.session import InterviewSession
@@ -182,6 +182,34 @@ async def create_candidate(
             updated_at=_now(),
         )
     )
+    await db.commit()
+    await db.refresh(candidate)
+    return candidate
+
+
+async def save_parsed_profile(
+    db: AsyncSession, candidate: Candidate, profile: dict
+) -> Candidate:
+    """把 AI 解析结果存成**草稿**（`profile_status=parsed`），确认时才置 confirmed。
+
+    为什么落库（2026-10-01 改口径）：一次解析云端实测 17~23s，原「结果不落库」
+    导致每次进解析页都要重跑一遍 —— 既重复烧 token，又让 HR 每次干等。
+    改成先存草稿后，重复进入直接读库里的结果，只有点「重新解析」才再调模型。
+
+    草稿**不等于生效数据**：不推进流程、不改姓名/邮箱/手机、不给匹配分用，
+    BR-04「人工确认后才写入」的口径没变，变的只是把「写在哪一步」从确认时
+    提前到解析后存草稿、确认时转正。
+    """
+    if candidate.profile_status == CONFIRMED:
+        raise bad_request(
+            ErrorCode.CANDIDATE_ALREADY_CONFIRMED, "该候选人已确认，不能覆盖其档案"
+        )
+    if candidate.purged_at is not None:
+        raise bad_request(ErrorCode.CANDIDATE_PURGED, "该候选人简历已粉碎，无法解析")
+
+    candidate.parsed_profile = profile or {}
+    candidate.profile_status = PARSED
+    candidate.updated_at = _now()
     await db.commit()
     await db.refresh(candidate)
     return candidate

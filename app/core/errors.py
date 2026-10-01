@@ -58,6 +58,8 @@ class ErrorCode:
     CANDIDATE_NAME_REQUIRED = "candidate.name_required"
     CANDIDATE_NOT_CONFIRMED = "candidate.not_confirmed"
     CANDIDATE_ALREADY_CONFIRMED = "candidate.already_confirmed"
+    # 简历已粉碎（行保留、内容清空）：再解析/再确认都没有意义
+    CANDIDATE_PURGED = "candidate.purged"
     RESUME_FILE_TOO_LARGE = "candidate.resume_file_too_large"
     RESUME_FILE_UNSUPPORTED = "candidate.resume_file_unsupported"
     RESUME_FILE_NO_TEXT = "candidate.resume_file_no_text"
