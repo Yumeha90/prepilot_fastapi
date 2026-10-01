@@ -187,6 +187,19 @@ async def create_candidate(
     return candidate
 
 
+def ensure_can_parse(candidate: Candidate) -> None:
+    """解析前置校验：**必须放在调用模型之前**。
+
+    一次解析云端 17~23s 且要烧 token，先跑模型再拒绝等于白烧一次。
+    """
+    if candidate.profile_status == CONFIRMED:
+        raise bad_request(
+            ErrorCode.CANDIDATE_ALREADY_CONFIRMED, "该候选人已确认，不能覆盖其档案"
+        )
+    if candidate.purged_at is not None:
+        raise bad_request(ErrorCode.CANDIDATE_PURGED, "该候选人简历已粉碎，无法解析")
+
+
 async def save_parsed_profile(
     db: AsyncSession, candidate: Candidate, profile: dict
 ) -> Candidate:
@@ -200,12 +213,7 @@ async def save_parsed_profile(
     BR-04「人工确认后才写入」的口径没变，变的只是把「写在哪一步」从确认时
     提前到解析后存草稿、确认时转正。
     """
-    if candidate.profile_status == CONFIRMED:
-        raise bad_request(
-            ErrorCode.CANDIDATE_ALREADY_CONFIRMED, "该候选人已确认，不能覆盖其档案"
-        )
-    if candidate.purged_at is not None:
-        raise bad_request(ErrorCode.CANDIDATE_PURGED, "该候选人简历已粉碎，无法解析")
+    ensure_can_parse(candidate)
 
     candidate.parsed_profile = profile or {}
     candidate.profile_status = PARSED

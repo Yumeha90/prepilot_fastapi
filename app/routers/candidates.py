@@ -241,6 +241,8 @@ async def reparse_candidate(
     """
     candidate = await svc.get_candidate(db, candidate_id)
     await svc.ensure_can_view(db, user, candidate)
+    # 先校验再调模型：一次解析云端 17~23s，跑完才发现不能写等于白烧一次 token
+    svc.ensure_can_parse(candidate)
     result = await resume_ai.parse_resume(candidate.resume_raw_text)
     await svc.save_parsed_profile(db, candidate, result["profile"])
     return result

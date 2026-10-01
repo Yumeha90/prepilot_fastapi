@@ -307,7 +307,10 @@ async def _scenario_upload_parse_confirm() -> None:
 
         import app.services.resume_ai as mod2
 
+        calls = {"n": 0}
+
         async def stub2(text: str):
+            calls["n"] += 1
             return resume_ai.ResumeStructure(
                 basic=resume_ai.ResumeBasic(name="张三", email=mail), skills=["Go"]
             )
@@ -320,6 +323,8 @@ async def _scenario_upload_parse_confirm() -> None:
             mod2._call = original2
         assert locked.status_code == 400
         assert locked.json()["detail"]["code"] == "candidate.already_confirmed"
+        # 校验必须在调模型**之前**：已确认的人再点解析，不能白烧一次 token
+        assert calls["n"] == 0
 
         # 9) 列表能查到，且带上职位与阶段
         # S2 起确认即派单：流程配置齐全 → 推进到首轮；没配流程 → 停在 pending 并给出原因
