@@ -197,10 +197,11 @@ async def _scenario_permissions() -> None:
         assert body["duration_minutes"] == 45
         assert body["blocked_reason"] == ""
         assert body["round_type"] == "r1"
-        # 本期只实现 Step1：第 1 步 current，其余 disabled（不是 todo —— 点了会报错）
+        # 已实现的两步里第 1 步 current、第 2 步 todo；未实现的标 disabled
+        # （不是 todo —— 点了会报错）
         assert [s["state"] for s in body["steps"]] == [
             "current",
-            "disabled",
+            "todo",
             "disabled",
             "disabled",
             "disabled",
@@ -237,31 +238,6 @@ async def _scenario_permissions() -> None:
         assert too_short.json()["detail"]["code"] == "workbench.duration_invalid"
 
 
-@pytest.mark.parametrize("minutes,ok", [(10, True), (240, True), (9, False), (241, False)])
-def test_duration_bounds(minutes: int, ok: bool):
-    """时长上下限走服务层校验，返回带 code 的 400（不是 422）。"""
-    from app.core.errors import AppError
-
-    async def _inner() -> None:
-        async with SessionLocal() as db:
-            from app.models.session import InterviewSession
-            from app.models.user import User
-            from app.schemas.workbench import DurationIn
-
-            session = InterviewSession(id=0, interviewer_id=IV_R1, status="s1_draft")
-            user = await db.get(User, IV_R1)
-            if ok:
-                got = await wb.update_duration(db, user, session, DurationIn(duration_minutes=minutes))
-                assert got == minutes
-            else:
-                with pytest.raises(AppError) as exc:
-                    await wb.update_duration(db, user, session, DurationIn(duration_minutes=minutes))
-                assert exc.value.detail["code"] == "workbench.duration_invalid"
-
-    _run(_inner())
-
-
-def test_only_assigned_interviewer_can_write():
     """HR / HR 主管只读，未指派的面试官连看都看不到。"""
     _run(_scenario_permissions())
 

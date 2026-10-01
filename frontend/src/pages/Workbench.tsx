@@ -47,10 +47,26 @@ import {
   type EvidenceStatus,
   type MatrixRow,
   type RowSource,
+  type ChainOut,
 } from '@/api/workbench'
 import { extractErrorCode, extractErrorMessage } from '@/api/client'
+import QuestionChain from '@/components/QuestionChain'
 
 const { Text, Paragraph } = Typography
+
+// 首屏数据还没到时给问题链一个空壳，避免子组件里到处判 undefined
+const EMPTY_CHAIN: ChainOut = {
+  nodes: [],
+  generated: false,
+  revision: 0,
+  updated_at: null,
+  generated_at: '',
+  model: '',
+  status: 'idle',
+  error: '',
+  budget_minutes: 0,
+  rag_hits: {},
+}
 
 const STATUS_OPTIONS: EvidenceStatus[] = ['sufficient', 'verify', 'missing']
 const STATUS_COLOR: Record<EvidenceStatus, string> = {
@@ -74,12 +90,20 @@ export default function Workbench() {
   const [rows, setRows] = useState<MatrixRow[]>([])
   const [dirty, setDirty] = useState(false)
   const [duration, setDuration] = useState<number>(45)
+  // 问题链是异步生成的（BR-12）：投递后开轮询，状态不再是 running 就停
+  const [polling, setPolling] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['workbench', id],
     queryFn: () => fetchWorkbench(id),
     enabled: Number.isFinite(id) && id > 0,
+    refetchInterval: polling ? 3000 : false,
   })
+
+  const chainStatus = data?.chain?.status
+  useEffect(() => {
+    if (chainStatus && chainStatus !== 'running') setPolling(false)
+  }, [chainStatus])
 
   // 服务端数据到达（含「重新生成」之后）时重置本地草稿
   useEffect(() => {
@@ -429,16 +453,36 @@ export default function Workbench() {
             style={{ marginTop: 12 }}
             onClick={addRow}
           >
-            {t('workbench.addRow')}
-          </Button>
-        )}
+          {t('workbench.addRow')}
+        </Button>
+      )}
       </Card>
+
+      <QuestionChain
+        sessionId={id}
+        chain={data?.chain ?? EMPTY_CHAIN}
+        canEdit={canEdit}
+        hasMatrix={(data?.matrix.rows.length ?? 0) > 0}
+        blocked={blocked}
+        onGenerated={() => {
+          setPolling(true)
+          void queryClient.invalidateQueries({ queryKey: ['workbench', id] })
+        }}
+      />
 
       <Card>
         <Space>
-          <Tooltip title={t('workbench.nextStepDisabled')}>
+          <Tooltip
+            title={
+              data?.chain?.status === 'ready'
+                ? t('workbench.nextStep2Disabled')
+                : t('workbench.nextStepDisabled')
+            }
+          >
             <Button type="primary" disabled>
-              {t('workbench.nextStep')}
+              {data?.chain?.status === 'ready'
+                ? t('workbench.nextStep2')
+                : t('workbench.nextStep')}
             </Button>
           </Tooltip>
           <Text type="secondary" style={{ fontSize: 12 }}>

@@ -101,6 +101,17 @@ class ErrorCode:
     WORKBENCH_MATRIX_INVALID = "workbench.matrix_invalid"
     WORKBENCH_DURATION_INVALID = "workbench.duration_invalid"
 
+    # Step2 问题链（PRD §3.4.2 / §6.4）
+    # 上一轮生成还在跑就又点了一次：BR-12 防误触，也避免两个 worker 写同一份草稿
+    WORKBENCH_CHAIN_RUNNING = "workbench.chain_running"
+    # 还没有矩阵就生成问题链：问题链是「矩阵重点项 → 题目」的展开，没有输入
+    WORKBENCH_CHAIN_NO_MATRIX = "workbench.chain_no_matrix"
+    WORKBENCH_CHAIN_INVALID = "workbench.chain_invalid"
+    # 节点不存在（换一换 / 删除指向了已被删掉的节点）
+    WORKBENCH_NODE_NOT_FOUND = "workbench.node_not_found"
+    # 向量库不可用：与「Milvus 不可用直接失败、不降级」同一口径（PRD §11.4）
+    WORKBENCH_RAG_UNAVAILABLE = "workbench.rag_unavailable"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -57,6 +57,13 @@ ROW_SOURCE_RESUME = "resume"
 ROW_SOURCE_MANUAL = "manual"
 ROW_SOURCES = (ROW_SOURCE_JD, ROW_SOURCE_RESUME, ROW_SOURCE_MANUAL)
 
+# Step2 问题链的生成状态（异步 Celery + 前端轮询，BR-12）
+CHAIN_IDLE = "idle"
+CHAIN_RUNNING = "running"
+CHAIN_READY = "ready"
+CHAIN_FAILED = "failed"
+CHAIN_STATUSES = (CHAIN_IDLE, CHAIN_RUNNING, CHAIN_READY, CHAIN_FAILED)
+
 
 class InterviewSession(Base):
     __tablename__ = "interview_sessions"
@@ -97,6 +104,18 @@ class InterviewSession(Base):
     matrix_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # ---- Step2 问题链（异步生成，PRD §3.4.2 / §6.4）----
+    chain_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    chain_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chain_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    chain_status: Mapped[str] = mapped_column(
+        String(16), default=CHAIN_IDLE, nullable=False
+    )
+    chain_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 失败原因落库：页面上要能区分「向量库不可用」与「AI 没产出内容」
+    chain_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

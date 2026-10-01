@@ -397,6 +397,25 @@ async def seed_notifications(db, users: dict[str, User]) -> None:
     await db.commit()
 
 
+def seed_org_assets() -> int:
+    """灌入「组织技术资产库」语料（PRD §6.4，供 C4 问题链 RAG 检索）。
+
+    **刻意为非致命**：seed 在每次部署后都会跑，而向量库走的是一条可能不通的链路
+    （云端 → 本机 Milvus）。灌不进去就让部署失败，是拿运维事故给数据准备陪葬 ——
+    运行时生成问题链时才会真正校验向量库，那时候**直接失败不降级**（PRD §11.4）。
+    """
+    from app.ai import rag
+    from app.ai.corpus import ORG_ASSETS
+
+    try:
+        n = rag.ingest(ORG_ASSETS)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] 组织技术资产库灌入失败（不影响部署，问题链生成时会报错）：{exc}")
+        return 0
+    print(f"[ok] 组织技术资产库：新灌入 {n} 条 / 共 {len(ORG_ASSETS)} 条语料")
+    return n
+
+
 async def run() -> int:
     if not settings.SEED_DEMO_DATA:
         print("SEED_DEMO_DATA=false，跳过用户与通知，仅同步角色与权限")
@@ -418,6 +437,7 @@ async def run() -> int:
             print(f"[ok] 演示职位 {positions} 个")
             for email, _, role_code in USER_SEEDS:
                 print(f"       {role_code:<12} {email}")
+            seed_org_assets()
 
     print("done.")
     return 0

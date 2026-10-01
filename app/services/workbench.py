@@ -46,6 +46,7 @@ from app.models.session import (
 )
 from app.models.user import User
 from app.schemas.workbench import (
+    ChainOut,
     DurationIn,
     MatrixIn,
     MatrixOut,
@@ -58,6 +59,13 @@ from app.schemas.workbench import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# 工作台的 Step2（问题链）产物由 question_chain 模块负责渲染，
+# 这里只引用它的视图函数，避免 P09 一屏接口自己拼一份结构导致两边不一致
+def chain_out(session: InterviewSession) -> ChainOut:  # noqa: F401 —— 供视图复用
+    from app.services import question_chain as qc
+
+    return qc.chain_out(session)
+
 # 矩阵行数上限：JD 能力项一般 3–6 条，给 AI 从简历补充留一倍余量。
 # 超过这个数面试官在 45 分钟里根本问不完，矩阵就失去「聚焦」的意义。
 MAX_ROWS = 12
@@ -69,10 +77,10 @@ MAX_FOCUS_LEN = 200
 # 超长简历本来已在 C2 分块解析过，这里用解析结果 + 原文前段足够定位证据
 RESUME_SNIPPET_CHARS = 6_000
 
-# Step1–Step5 的步骤指示器：本期只实现第 1 步，
-# 后面几步标记为 disabled 而不是 todo —— 点了报错比点了没反应更糟
+# Step1–Step5 的步骤指示器；Step3 之后还没实现，标记 disabled 而不是 todo ——
+# 点了报错比点了没反应更糟
 STEP_KEYS = ("step1", "step2", "step3", "step4", "step5")
-IMPLEMENTED_STEPS = 1
+IMPLEMENTED_STEPS = 2
 STATUS_STEP_INDEX = {
     S1_DRAFT: 0,
     S2_DRAFT: 1,
@@ -115,7 +123,7 @@ def ensure_can_edit(user: User, session: InterviewSession) -> None:
 # ---------------------------------------------------------------- 视图
 
 
-def _clean(text: str) -> str:
+def clean_text(text: str) -> str:
     """去编号 / 项目符号 / 多余空白（模型偶发吐出 `1. ` 这类前缀）。"""
     s = re.sub(r"^(?:[0-9]+[.、)）:：]\s*|[-*•·▪◦]\s*)", "", str(text or "").strip())
     return re.sub(r"\s+", " ", s).strip()
@@ -182,7 +190,7 @@ def _steps(session: InterviewSession) -> list[WorkbenchStep]:
     return out
 
 
-def _blocked_reason(candidate: Candidate | None, position: Position | None) -> str:
+def blocked_reason(candidate: Candidate | None, position: Position | None) -> str:
     """生成矩阵的前置：JD 已确认 + 简历有内容。缺任一都不该让面试官对着空气备面。"""
     if position is None or position.jd_status != "confirmed":
         return "jd_not_confirmed"
@@ -224,8 +232,9 @@ async def workbench_view(
         can_edit=can_edit(user, session),
         read_only_reason=read_only_reason(user, session),
         matrix=_matrix_out(session),
+        chain=chain_out(session),
         steps=_steps(session),
-        blocked_reason=_blocked_reason(candidate, position),
+        blocked_reason=blocked_reason(candidate, position),
     )
 
 
@@ -271,14 +280,14 @@ def _competency_lines(position: Position) -> str:
         return ""
     lines = []
     for i, c in enumerate(comps, start=1):
-        text = _clean(str(c.get("text") or ""))
+        text = clean_text(str(c.get("text") or ""))
         if not text:
             continue
         lines.append(f"{i}. {text}（权重 {c.get('weight') or 0}）")
     return "\n".join(lines)
 
 
-def _resume_digest(candidate: Candidate) -> str:
+def resume_digest(candidate: Candidate) -> str:
     """把解析结果压成文本；解析结果缺失时退回简历原文前段。"""
     profile = candidate.parsed_profile or {}
     parts: list[str] = []
@@ -335,7 +344,7 @@ def _normalize_rows(rows: list[_RowLLM], position: Position) -> list[dict]:
     for c in position.jd_competencies or []:
         if not isinstance(c, dict):
             continue
-        text = _clean(str(c.get("text") or ""))
+        text = clean_text(str(c.get("text") or ""))
         if text:
             try:
                 weight_by_text[text.lower()] = float(c.get("weight") or 0)
@@ -345,7 +354,7 @@ def _normalize_rows(rows: list[_RowLLM], position: Position) -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for i, r in enumerate(rows):
-        capability = _clean(r.capability)[:MAX_CAPABILITY_LEN]
+        capability = clean_text(r.capability)[:MAX_CAPABILITY_LEN]
         if not capability:
             continue
         key = capability.lower()
@@ -367,9 +376,9 @@ def _normalize_rows(rows: list[_RowLLM], position: Position) -> list[dict]:
                 "source": source,
                 "capability": capability,
                 "weight": weight_by_text.get(key),
-                "evidence": _clean(r.evidence)[:MAX_EVIDENCE_LEN],
+                "evidence": clean_text(r.evidence)[:MAX_EVIDENCE_LEN],
                 "status": status,
-                "focus": _clean(r.focus)[:MAX_FOCUS_LEN],
+                "focus": clean_text(r.focus)[:MAX_FOCUS_LEN],
                 "is_key": False,
             }
         )
@@ -403,7 +412,7 @@ async def generate_matrix(
     ensure_can_edit(user, session)
     candidate = await db.get(Candidate, session.candidate_id)
     position = await db.get(Position, session.position_id)
-    reason = _blocked_reason(candidate, position)
+    reason = blocked_reason(candidate, position)
     if reason == "jd_not_confirmed":
         raise bad_request(
             ErrorCode.WORKBENCH_NO_JD, "该职位的 JD 还未确认，无法生成能力-证据矩阵"
@@ -413,7 +422,7 @@ async def generate_matrix(
             ErrorCode.WORKBENCH_NO_RESUME, "候选人简历为空或已粉碎，无法生成能力-证据矩阵"
         )
 
-    assert candidate is not None and position is not None  # _blocked_reason 已保证
+    assert candidate is not None and position is not None  # blocked_reason 已保证
     comp_lines = _competency_lines(position)
     if not comp_lines:
         raise bad_request(
@@ -423,7 +432,7 @@ async def generate_matrix(
     prompt = (
         f"岗位：{position.name}\n\n"
         f"【岗位核心能力项】\n{comp_lines}\n\n"
-        f"【候选人简历】\n{_resume_digest(candidate)}"
+        f"【候选人简历】\n{resume_digest(candidate)}"
     )
     data = await _call_llm(prompt)
     rows = _normalize_rows(list(data.rows), position)
@@ -461,7 +470,7 @@ async def save_matrix(
     rows: list[dict] = []
     seen: set[str] = set()
     for i, r in enumerate(payload.rows):
-        capability = _clean(r.capability)[:MAX_CAPABILITY_LEN]
+        capability = clean_text(r.capability)[:MAX_CAPABILITY_LEN]
         if not capability:
             continue
         if capability.lower() in seen:
@@ -471,13 +480,13 @@ async def save_matrix(
         status = r.status if r.status in EVIDENCE_STATUSES else EVIDENCE_VERIFY
         rows.append(
             {
-                "id": _clean(r.id) or f"m{i + 1}",
+                "id": clean_text(r.id) or f"m{i + 1}",
                 "source": source,
                 "capability": capability,
                 "weight": _as_weight(r.weight),
-                "evidence": _clean(r.evidence)[:MAX_EVIDENCE_LEN],
+                "evidence": clean_text(r.evidence)[:MAX_EVIDENCE_LEN],
                 "status": status,
-                "focus": _clean(r.focus)[:MAX_FOCUS_LEN],
+                "focus": clean_text(r.focus)[:MAX_FOCUS_LEN],
                 "is_key": bool(r.is_key),
             }
         )
@@ -525,6 +534,10 @@ async def _persist(
     session.matrix_revision = (session.matrix_revision or 0) + 1
     session.matrix_updated_at = now
     session.updated_at = now
+    # Step1 有产物即推进：s1_draft → s2_draft（步骤指示器上第 1 步变「已完成」）。
+    # 只在 s1 推进，不回退 —— 面试官回头改矩阵不该把已经做完的 Step2 打回未完成
+    if session.status == S1_DRAFT:
+        session.status = S2_DRAFT
     await db.commit()
     await db.refresh(session)
     return MatrixSaveOut(matrix=_matrix_out(session), stale=stale)
