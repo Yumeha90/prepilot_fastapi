@@ -40,7 +40,7 @@ export async function extractResume(file: File): Promise<{ filename: string; tex
   const form = new FormData()
   form.append('file', file)
   const { data } = await apiClient.post<{ filename: string; text: string }>(
-    '/resume/extract',
+    '/api/resume/extract',
     form,
     { headers: { 'Content-Type': 'multipart/form-data' } },
   )
@@ -49,6 +49,6 @@ export async function extractResume(file: File): Promise<{ filename: string; tex
 
 /** AI 解析简历（C2，同步）。结果不落库，确认后才写入 */
 export async function parseResume(rawText: string): Promise<ParseResult> {
-  const { data } = await apiClient.post<ParseResult>('/resume/parse', { raw_text: rawText })
+  const { data } = await apiClient.post<ParseResult>('/api/resume/parse', { raw_text: rawText })
   return data
 }

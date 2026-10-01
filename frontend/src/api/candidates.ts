@@ -2,7 +2,7 @@ import apiClient from './client'
 
 import type { ResumeProfile } from './resume'
 
-const BASE = '/candidates'
+const BASE = '/api/candidates'
 
 /** 简历侧状态：已上传 / 已解析 / 已确认 / 已粉碎 */
 export type ProfileStatus = 'uploading' | 'parsed' | 'confirmed' | 'archived'
