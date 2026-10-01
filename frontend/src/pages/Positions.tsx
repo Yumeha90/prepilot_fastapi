@@ -29,6 +29,7 @@ import {
   type PositionItem,
   type PositionStatus,
 } from '@/api/positions'
+import { fetchActiveCandidates } from '@/api/board'
 import { fetchUserOptions } from '@/api/users'
 import { extractErrorCode } from '@/api/client'
 import { useAuthStore } from '@/store/auth'
@@ -58,6 +59,8 @@ export default function Positions() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [pending, setPending] = useState<{ action: ActionKind; item: PositionItem } | null>(null)
+  // 关闭前拉一次「在流程候选人数」：3.2 时这里恒 0，S3 接上真实统计
+  const [activeCount, setActiveCount] = useState<number | null>(null)
 
   const { data: ownerOptions = [] } = useQuery({
     queryKey: ['user-options', 'owner'],
@@ -164,13 +167,26 @@ export default function Positions() {
       )
     : ''
 
+  const askClose = async (row: PositionItem) => {
+    setPending({ action: 'close', item: row })
+    setActiveCount(null)
+    try {
+      setActiveCount(await fetchActiveCandidates(row.id))
+    } catch {
+      setActiveCount(null) // 拿不到就退回不带人数的文案，不能因为统计失败就卡住关闭
+    }
+  }
+
   const dialogBody = pending
     ? t(
         pending.action === 'duplicate'
           ? 'position.duplicateHint'
           : pending.action === 'close'
-            ? 'position.closeHint'
+            ? activeCount
+              ? 'position.closeWithActive'
+              : 'position.closeHint'
             : 'position.deleteHint',
+        { n: activeCount ?? 0 },
       )
     : ''
 
@@ -264,9 +280,18 @@ export default function Positions() {
               {t('position.action.reopen')}
             </Button>
           ) : (
-            <Button type="link" size="small" onClick={() => setPending({ action: 'close', item: row })}>
-              {t('position.action.close')}
-            </Button>
+            <>
+              <Button
+                type="link"
+                size="small"
+                onClick={() => void navigate(`/candidates?position_id=${row.id}`)}
+              >
+                {t('position.action.viewCandidates')}
+              </Button>
+              <Button type="link" size="small" onClick={() => void askClose(row)}>
+                {t('position.action.close')}
+              </Button>
+            </>
           )}
           <Button
             type="link"

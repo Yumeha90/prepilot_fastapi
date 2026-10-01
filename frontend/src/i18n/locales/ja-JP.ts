@@ -108,6 +108,8 @@ export default {
   },
   candidate: {
     listTitle: '候補者',
+    boardTitle: '候補者ボード',
+    filterPosition: 'ポジションで絞り込み',
     uploadResume: '履歴書をアップロード',
     uploadTitle: '履歴書アップロード',
     parseTitle: '履歴書解析の確定',
@@ -143,6 +145,23 @@ export default {
     action: {
       goParse: '解析・確定へ',
       viewResume: '履歴書を見る',
+      // ボード操作（D9：ドラッグしない、ボタンのみ）
+      advance: '次へ進める',
+      rollback: '戻す',
+      dispose: '最終処理',
+      accept: '採用',
+      reject: '不合格',
+      pool: 'タレントプールへ',
+      archive: '応募を無効化',
+    },
+    // ラウンドの進捗 = セッション状態
+    sessionStatus: {
+      s1_draft: '未着手',
+      s2_draft: '準備中',
+      s3_draft: '準備中',
+      s4_draft: '提出待ち',
+      s5_draft: '提出待ち',
+      submitted: '面評を提出済み',
     },
     // アップロード画面
     positionPlaceholder: '応募するポジションを選択してください',
@@ -213,6 +232,7 @@ export default {
       dispatched: '確定し、{{name}} に割り当てました（{{round}}）',
       dispatchFailed: '確定しましたが、割当に失敗しました：{{reason}}',
       authAccepted: '「データ処理に関する同意」に同意しました',
+      stageChanged: '候補者のステージを更新しました',
     },
   },
   position: {
@@ -256,6 +276,8 @@ export default {
     closeTitle: 'ポジションを終了',
     closeHint:
       '終了すると新規候補者の受付を停止し、一覧では既定で非表示になります（「終了済みを表示」で再表示）。進行中の候補者は自動的に不合格になりません。ボードで処理してください。終了したポジションは 1 年保持され、再開できます。',
+    closeWithActive:
+      'このポジションには進行中の候補者が {{n}} 名います。終了すると新規受付を停止し一覧では非表示になりますが、自動的に不合格にはなりません — ボードで処理してください。終了したポジションは 1 年保持され、再開できます。',
     deleteTitle: 'ポジションを削除',
     deleteHint: 'この下書きは完全に削除され、復元できません。',
     deleteBlocked: '下書きのみ削除できます。それ以外は「終了」を使用してください',
@@ -340,6 +362,7 @@ export default {
     'position.status_invalid': 'このステータス変更は許可されていません',
     'position.jd_invalid': 'JD が不正です（必須条件 ≥1、コア能力 ≥3、weights 合計 100）',
     'position.rounds_invalid': 'ラウンド構成が正しくありません',
+    'position.round_in_use': 'このラウンドには面接セッションがあるため削除できません',
     'position.jd_file_unsupported': '対応していないファイル形式です（テキスト PDF / DOCX / TXT / MD のみ）',
     'position.jd_file_too_large': 'ファイルサイズが 5MB を超えています',
     'position.jd_file_no_text': 'テキストを抽出できません。テキスト形式の PDF を使うか、本文を貼り付けてください',
@@ -357,6 +380,8 @@ export default {
     'candidate.not_confirmed': '確定する前に候補者名を入力してください',
     'candidate.already_confirmed': 'この候補者は確定済みです',
     'candidate.purged': 'この履歴書は破棄済みのため解析できません',
+    'candidate.stage_invalid': '現在のステージではこの操作はできません',
+    'application.not_found': '応募記録が見つかりません',
     'candidate.resume_file_unsupported': '対応していないファイル形式です（テキスト型 PDF / DOCX / TXT / MD のみ）',
     'candidate.resume_file_too_large': 'ファイルが 5MB を超えています。短くして再試行してください',
     'candidate.resume_file_no_text': '抽出できるテキストがありません。テキスト型 PDF を使うか、内容を貼り付けてください',

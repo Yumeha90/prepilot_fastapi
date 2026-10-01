@@ -21,7 +21,7 @@ import Placeholder from '@/pages/Placeholder'
 import PositionForm from '@/pages/PositionForm'
 import Positions from '@/pages/Positions'
 import Roles from '@/pages/Roles'
-import Candidates from '@/pages/Candidates'
+import Board from '@/pages/Board'
 import CandidateUpload from '@/pages/CandidateUpload'
 import CandidateParse from '@/pages/CandidateParse'
 
@@ -30,8 +30,8 @@ const protectedRoutes: RouteObject[] = [
   { path: 'positions', element: <Positions /> },
   { path: 'positions/new', element: <PositionForm /> },
   { path: 'positions/:id/edit', element: <PositionForm /> },
-  // 候选人：列表 / 上传 / 解析确认
-  { path: 'candidates', element: <Candidates /> },
+  // 候选人：看板（P08）/ 上传（P04）/ 解析确认（P05）
+  { path: 'candidates', element: <Board /> },
   { path: 'candidates/new', element: <CandidateUpload /> },
   { path: 'candidates/:id/parse', element: <CandidateParse /> },
   { path: 'workbench', element: <Placeholder /> },

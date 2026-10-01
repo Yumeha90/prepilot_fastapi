@@ -436,6 +436,22 @@ async def resume_position(
     return _status_out(position)
 
 
+@router.get("/{position_id}/active-candidates", response_model=dict)
+async def active_candidates(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_perm("position:edit")),
+) -> dict:
+    """在流程（未终结处置）的候选人数量 —— 关闭职位前的二次确认要显示这个数。
+
+    3.2 落地时这里恒返回 0（当时还没有 applications），S3 接上真实统计。
+    """
+    from app.services import board as board_svc
+
+    count = await board_svc.count_active_candidates(db, position_id)
+    return {"count": count}
+
+
 @router.post("/{position_id}/close", response_model=PositionOut)
 async def close_position(
     position_id: int,

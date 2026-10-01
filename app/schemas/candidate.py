@@ -97,28 +97,5 @@ class CandidateOut(BaseModel):
     dispatch_notice: str = ""
 
 
-class CandidateListItem(BaseModel):
-    id: int
-    name: str
-    contact_email: str
-    profile_status: str
-    # 本期一人一职位（D3），列表直接带上唯一的职位与阶段
-    position_id: int | None = None
-    position_name: str = ""
-    stage: str = ""
-    # 已派单后的当前面试官（未派单为空）
-    interviewer_name: str = ""
-    created_by_name: str = ""
-    created_at: datetime
-    updated_at: datetime
-
-
-class CandidatePaged(BaseModel):
-    items: list[CandidateListItem]
-    total: int
-    page: int
-    page_size: int
-
-
 class MessageOut(BaseModel):
     message: str

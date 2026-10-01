@@ -20,6 +20,7 @@ from app.middleware.logging import RequestLogMiddleware
 from app.routers import (
     admin,
     auth,
+    board,
     candidates,
     health,
     jd,
@@ -79,6 +80,8 @@ def create_app() -> FastAPI:
     app.include_router(resume.router, prefix=settings.API_PREFIX)
     app.include_router(candidates.router, prefix=settings.API_PREFIX)
     app.include_router(sessions.router, prefix=settings.API_PREFIX)
+    # 3.3 看板 P08（列可见性按 BR-15 由后端下发）
+    app.include_router(board.router, prefix=settings.API_PREFIX)
     return app
 
 

@@ -104,6 +104,8 @@ export default {
     hint: '该模块将在后续阶段落地（PRD 3.2 及之后）',
   },
   candidate: {
+    boardTitle: '候选人看板',
+    filterPosition: '按职位筛选',
     listTitle: '候选人',
     uploadResume: '上传简历',
     uploadTitle: '上传简历',
@@ -140,6 +142,23 @@ export default {
     action: {
       goParse: '去解析确认',
       viewResume: '查看简历',
+      // 看板处置（D9：不做拖拽，一律走按钮）
+      advance: '推进',
+      rollback: '退回',
+      dispose: '终结处置',
+      accept: '录用',
+      reject: '淘汰',
+      pool: '转入人才库',
+      archive: '作废应聘记录',
+    },
+    // 当轮进展 = 会话状态
+    sessionStatus: {
+      s1_draft: '待备面',
+      s2_draft: '备面中',
+      s3_draft: '备面中',
+      s4_draft: '待提交',
+      s5_draft: '待提交',
+      submitted: '已提交面评',
     },
     // 上传页
     positionPlaceholder: '请选择该候选人应聘的职位',
@@ -211,6 +230,7 @@ export default {
       dispatched: '已确认并派单给 {{name}}（{{round}}）',
       dispatchFailed: '已确认，但派单未成功：{{reason}}',
       authAccepted: '已同意《数据处理授权》',
+      stageChanged: '已更新候选人阶段',
     },
   },
   position: {
@@ -263,6 +283,8 @@ export default {
     closeTitle: '关闭职位',
     closeHint:
       '关闭后该职位停止接收新候选人，列表中默认隐藏，可勾选「显示已关闭」重新查看。关闭不会自动淘汰在流程中的候选人，请先到候选人看板完成终结处置。职位保留 1 年，之后可重新打开。',
+    closeWithActive:
+      '该职位下还有 {{n}} 位在流程候选人。关闭后不再接收新候选人、列表默认隐藏，但不会自动淘汰他们 —— 请先到候选人看板完成终结处置。职位保留 1 年，之后可重新打开。',
     deleteTitle: '删除职位',
     deleteHint: '该职位处于草稿状态，删除后无法恢复。',
     deleteBlocked: '只有草稿状态的职位可以删除，其余请改为「关闭」',
@@ -344,6 +366,7 @@ export default {
     'position.status_invalid': '不允许该状态变更',
     'position.jd_invalid': 'JD 校验未通过（硬性门槛 ≥1 项、核心能力 ≥3 项、权重合计 100）',
     'position.rounds_invalid': '面试流程配置不符合要求',
+    'position.round_in_use': '该轮次已经派过面试会话，不能删除',
     'position.jd_file_unsupported': '不支持的文件类型，仅支持文本型 PDF、DOCX、TXT、MD',
     'position.jd_file_too_large': '文件超过 5MB，请精简后重试',
     'position.jd_file_no_text': '该文件无可提取文本，请改用文本型 PDF 或手动粘贴纯文本',
@@ -361,6 +384,8 @@ export default {
     'candidate.not_confirmed': '请先补全候选人姓名再确认',
     'candidate.already_confirmed': '该候选人已确认，无需重复操作',
     'candidate.purged': '该候选人简历已粉碎，无法解析',
+    'candidate.stage_invalid': '该阶段不能这样流转（已终结处置的候选人只能重新打开流程）',
+    'application.not_found': '应聘记录不存在',
     'candidate.resume_file_unsupported': '不支持的文件类型，仅支持文本型 PDF、DOCX、TXT、MD',
     'candidate.resume_file_too_large': '文件超过 5MB，请精简后重试',
     'candidate.resume_file_no_text': '该文件无可提取文本，请改用文本型 PDF 或手动粘贴纯文本',

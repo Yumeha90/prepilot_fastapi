@@ -326,7 +326,7 @@ async def _scenario_upload_parse_confirm() -> None:
         # 校验必须在调模型**之前**：已确认的人再点解析，不能白烧一次 token
         assert calls["n"] == 0
 
-        # 9) 列表能查到，且带上职位与阶段
+        # 9) 看板能查到（S3 起列表接口已移除，看板是唯一入口），带上职位与阶段
         # S2 起确认即派单：流程配置齐全 → 推进到首轮；没配流程 → 停在 pending 并给出原因
         app_row = ok.json()["applications"][0]
         if ok.json()["dispatch_notice"]:
@@ -334,12 +334,17 @@ async def _scenario_upload_parse_confirm() -> None:
         else:
             assert app_row["stage"] == "in_r1"
             assert app_row["interviewer_name"]
-        listed = await client.get("/api/candidates", params={"keyword": "张三"}, headers=headers)
-        assert listed.status_code == 200
-        assert listed.json()["total"] >= 1
-        row = next(x for x in listed.json()["items"] if x["id"] == cid)
-        assert row["position_id"] == pid
-        assert row["stage"] == app_row["stage"]
+        board = await client.get("/api/board", params={"position_id": pid}, headers=headers)
+        assert board.status_code == 200
+        cards = [
+            c
+            for col in board.json()["columns"]
+            for c in col["cards"]
+            if c["candidate_id"] == cid
+        ]
+        assert len(cards) == 1
+        assert cards[0]["stage"] == app_row["stage"]
+        assert cards[0]["position_id"] == pid
 
 
 async def _scenario_visibility() -> None:
@@ -369,8 +374,10 @@ async def _scenario_visibility() -> None:
         )
         assert others.status_code == 200
 
-        listed = await client.get("/api/candidates", headers=iv)
-        ids = {x["id"] for x in listed.json()["items"]}
+        board = await client.get("/api/board", params={"position_id": pid}, headers=iv)
+        ids = {
+            c["candidate_id"] for col in board.json()["columns"] for c in col["cards"]
+        }
         assert mine.json()["id"] in ids  # 自己上传的能看到（方案 a）
         assert others.json()["id"] not in ids  # 他人的看不到
 

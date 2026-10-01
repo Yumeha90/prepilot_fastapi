@@ -334,9 +334,37 @@ async def count_affected_scores(db: AsyncSession, position_id: int) -> int:
     return await count_current_scores(db, position_id)
 
 
+async def ensure_removable_rounds(
+    db: AsyncSession, position: Position, keep_types: set[str]
+) -> None:
+    """整体替换轮次前：本次会被删掉的轮次若已有会话，先拦住。
+
+    会话的 `round_id` 是指向 `position_rounds` 的外键，真删下去要么撞外键约束、
+    要么留下悬空引用（会话里「这一轮是谁面的」就没了）。
+    换面试官 / 调顺序不受影响：已派单的会话带的是**派单那一刻的快照**，
+    不跟随后续配置变更（PRD 3.2 口径）。
+    """
+    from app.models.session import InterviewSession
+
+    doomed = [r for r in position.rounds if r.type not in keep_types]
+    if not doomed:
+        return
+    ids = [r.id for r in doomed]
+    rows = await db.scalars(
+        select(InterviewSession.id).where(InterviewSession.round_id.in_(ids))
+    )
+    if list(rows):
+        names = "、".join(r.name or r.type for r in doomed)
+        raise bad_request(
+            ErrorCode.ROUND_IN_USE,
+            f"轮次「{names}」已经派过面试会话，不能删除；请先把相关候选人终结处置或作废",
+        )
+
+
 async def save_rounds(db: AsyncSession, position: Position, rounds: list[RoundIn]) -> None:
     """整体替换轮次（前端按 ▲/▼ 排好序后一次性提交）。"""
     validate_rounds(rounds)
+    await ensure_removable_rounds(db, position, {r.type for r in rounds})
     for row in list(position.rounds):
         await db.delete(row)
     await db.flush()

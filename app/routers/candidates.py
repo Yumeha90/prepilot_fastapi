@@ -19,9 +19,8 @@ from app.schemas.candidate import (
     CandidateConfirmIn,
     CandidateCreateIn,
     CandidateOut,
-    CandidatePaged,
 )
-from app.schemas.candidate import ApplicationOut, CandidateListItem
+from app.schemas.candidate import ApplicationOut
 from app.schemas.session import SessionOut
 from app.services import candidate as svc
 from app.services import resume_ai
@@ -146,55 +145,6 @@ async def create_candidate(
     """
     created = await svc.create_candidate(db, user, payload)
     return await _out(db, created)
-
-
-@router.get("", response_model=CandidatePaged)
-async def list_candidates(
-    keyword: str = "",
-    position_id: int | None = None,
-    status: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_any_perm(*VIEW_PERMS)),
-) -> CandidatePaged:
-    rows, total = await svc.list_candidates(
-        db,
-        user,
-        keyword=keyword,
-        position_id=position_id,
-        status=status,
-        page=page,
-        page_size=page_size,
-    )
-    items: list[CandidateListItem] = []
-    for c in rows:
-        app = (c.applications or [None])[0]
-        pos_name = ""
-        if app is not None:
-            pos = await db.get(Position, app.position_id)
-            pos_name = pos.name if pos else ""
-        interviewer_name = ""
-        if app is not None:
-            sessions = await _sessions_of(db, c.id)
-            mine = [s for s in sessions if s.application_id == app.id]
-            interviewer_name = mine[-1].interviewer_name if mine else ""
-        items.append(
-            CandidateListItem(
-                id=c.id,
-                name=c.name,
-                contact_email=c.contact_email,
-                profile_status=c.profile_status,
-                position_id=app.position_id if app else None,
-                position_name=pos_name,
-                stage=app.stage if app else "",
-                interviewer_name=interviewer_name,
-                created_by_name=await _user_name(db, c.created_by),
-                created_at=c.created_at,
-                updated_at=c.updated_at,
-            )
-        )
-    return CandidatePaged(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/{candidate_id}", response_model=CandidateOut)

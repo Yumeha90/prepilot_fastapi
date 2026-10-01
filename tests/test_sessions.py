@@ -175,8 +175,11 @@ async def _scenario_dispatch() -> None:
 
         # 2) 面试官（r1）能看到候选人与自己的会话
         iv = await _login(client, "interviewer@prepilot.dev")
-        listed = await client.get("/api/candidates", params={"page_size": 100}, headers=iv)
-        assert cid in [c["id"] for c in listed.json()["items"]]
+        # 面试官能在看板（r1 列）看到派给自己的候选人
+        board = await client.get("/api/board", headers=iv)
+        assert cid in [
+            c["candidate_id"] for col in board.json()["columns"] for c in col["cards"]
+        ]
 
         sessions = await client.get("/api/sessions", headers=iv)
         assert sessions.status_code == 200

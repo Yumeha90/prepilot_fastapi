@@ -109,6 +109,8 @@ export default {
   },
   candidate: {
     listTitle: 'Candidates',
+    boardTitle: 'Candidate board',
+    filterPosition: 'Filter by position',
     uploadResume: 'Upload resume',
     uploadTitle: 'Upload resume',
     parseTitle: 'Resume parsing confirmation',
@@ -144,6 +146,23 @@ export default {
     action: {
       goParse: 'Parse & confirm',
       viewResume: 'View resume',
+      // Board actions (D9: no drag & drop, buttons only)
+      advance: 'Advance',
+      rollback: 'Roll back',
+      dispose: 'Settle',
+      accept: 'Hire',
+      reject: 'Reject',
+      pool: 'Talent pool',
+      archive: 'Void application',
+    },
+    // Round progress = session status
+    sessionStatus: {
+      s1_draft: 'Not started',
+      s2_draft: 'In progress',
+      s3_draft: 'In progress',
+      s4_draft: 'Pending submit',
+      s5_draft: 'Pending submit',
+      submitted: 'Submitted',
     },
     // Upload page
     positionPlaceholder: 'Select the position this candidate applies for',
@@ -214,6 +233,7 @@ export default {
       dispatched: 'Confirmed and dispatched to {{name}} ({{round}})',
       dispatchFailed: 'Confirmed, but dispatch failed: {{reason}}',
       authAccepted: 'Data Processing Authorization accepted',
+      stageChanged: 'Candidate stage updated',
     },
   },
   position: {
@@ -257,6 +277,8 @@ export default {
     closeTitle: 'Close position',
     closeHint:
       'A closed position stops receiving new candidates and is hidden from the list by default — tick "Show closed" to see it again. Closing does not reject candidates in progress; settle them on the board first. Closed positions are kept for 1 year and can be reopened.',
+    closeWithActive:
+      'There are still {{n}} candidates in progress under this position. Closing stops new applications and hides it from the list, but does NOT reject them — settle them on the board first. Closed positions are kept for 1 year and can be reopened.',
     deleteTitle: 'Delete position',
     deleteHint: 'This draft position will be permanently deleted.',
     deleteBlocked: 'Only draft positions can be deleted; use "Close" instead',
@@ -341,6 +363,7 @@ export default {
     'position.status_invalid': 'This status change is not allowed',
     'position.jd_invalid': 'JD invalid (hard gates ≥1, competencies ≥3, weights sum to 100)',
     'position.rounds_invalid': 'Interview rounds configuration is invalid',
+    'position.round_in_use': 'This round already has interview sessions and cannot be removed',
     'position.jd_file_unsupported': 'Unsupported file type. Use text-based PDF, DOCX, TXT or MD',
     'position.jd_file_too_large': 'File exceeds 5MB',
     'position.jd_file_no_text': 'No extractable text. Use a text-based PDF or paste the JD manually',
@@ -358,6 +381,8 @@ export default {
     'candidate.not_confirmed': 'Please fill in the candidate name before confirming',
     'candidate.already_confirmed': 'This candidate is already confirmed',
     'candidate.purged': 'This resume has been purged and cannot be parsed',
+    'candidate.stage_invalid': 'This transition is not allowed for the current stage',
+    'application.not_found': 'Application not found',
     'candidate.resume_file_unsupported': 'Unsupported file type — text-based PDF, DOCX, TXT, MD only',
     'candidate.resume_file_too_large': 'File exceeds 5MB, please trim it and retry',
     'candidate.resume_file_no_text': 'No extractable text — use a text-based PDF or paste the content',

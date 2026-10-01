@@ -61,40 +61,6 @@ export interface CandidateDetail {
   dispatch_notice: string
 }
 
-export interface CandidateItem {
-  id: number
-  name: string
-  contact_email: string
-  profile_status: ProfileStatus
-  position_id: number | null
-  position_name: string
-  stage: string
-  interviewer_name: string
-  created_by_name: string
-  created_at: string
-  updated_at: string
-}
-
-export interface CandidatePaged {
-  items: CandidateItem[]
-  total: number
-  page: number
-  page_size: number
-}
-
-export interface ListParams {
-  keyword?: string
-  position_id?: number
-  status?: ProfileStatus
-  page?: number
-  page_size?: number
-}
-
-export async function fetchCandidates(params: ListParams = {}): Promise<CandidatePaged> {
-  const { data } = await apiClient.get<CandidatePaged>(BASE, { params })
-  return data
-}
-
 export async function fetchCandidate(id: number): Promise<CandidateDetail> {
   const { data } = await apiClient.get<CandidateDetail>(`${BASE}/${id}`)
   return data

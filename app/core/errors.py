@@ -75,6 +75,12 @@ class ErrorCode:
     SESSION_NO_INTERVIEWER = "session.no_interviewer"
     SESSION_ALREADY_DISPATCHED = "session.already_dispatched"
 
+    # 看板阶段流转（PRD 3.3.3 P08）
+    STAGE_INVALID = "candidate.stage_invalid"
+    APPLICATION_NOT_FOUND = "application.not_found"
+    # 删除轮次时该轮已有在跑的会话：删了会让会话指向空轮次
+    ROUND_IN_USE = "position.round_in_use"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""
