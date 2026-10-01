@@ -78,6 +78,10 @@ class ErrorCode:
     # 看板阶段流转（PRD 3.3.3 P08）
     STAGE_INVALID = "candidate.stage_invalid"
     APPLICATION_NOT_FOUND = "application.not_found"
+
+    # 人岗匹配（PRD §6.7 / §6.8 P18）
+    MATCH_NOT_FOUND = "match.not_found"
+    MATCH_INVALID_RANGE = "match.invalid_range"
     # 删除轮次时该轮已有在跑的会话：删了会让会话指向空轮次
     ROUND_IN_USE = "position.round_in_use"
 

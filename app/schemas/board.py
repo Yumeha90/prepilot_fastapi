@@ -33,6 +33,11 @@ class BoardCard(BaseModel):
     session_status: str = ""
     # 简历侧状态：uploading / parsed / confirmed / archived（卡片上提示"待确认"）
     profile_status: str = ""
+    # 最新人岗匹配分（BR-21 只显示分，解释在 P18）：无分 / 未参与计算时为 None
+    match_score: float | None = None
+    match_tier: str = ""
+    # CURRENT 有效 / STALE 岗位标准已变更，徽章置灰提示需重算（§3.3.3）
+    match_status: str = ""
     updated_at: datetime
 
 

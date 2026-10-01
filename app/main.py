@@ -24,6 +24,7 @@ from app.routers import (
     candidates,
     health,
     jd,
+    match,
     me,
     positions,
     resume,
@@ -82,6 +83,8 @@ def create_app() -> FastAPI:
     app.include_router(sessions.router, prefix=settings.API_PREFIX)
     # 3.3 看板 P08（列可见性按 BR-15 由后端下发）
     app.include_router(board.router, prefix=settings.API_PREFIX)
+    # 3.3 人岗匹配 P18（BR-18：面试官没有 match:view，路由级 403）
+    app.include_router(match.router, prefix=settings.API_PREFIX)
     return app
 
 

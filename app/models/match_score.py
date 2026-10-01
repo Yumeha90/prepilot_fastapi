@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -51,14 +52,59 @@ class MatchScore(Base):
     status: Mapped[str] = mapped_column(String(16), default=CURRENT, nullable=False)
 
     vetoed_gates: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    # 简历没写、无法核实的门槛：不否决，但要在 P18 提示人工确认
+    unknown_gates: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     breakdown: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     evidences: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     bonuses: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     summary: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # AI 总结（BR-21）异步补写：pending 生成中 / ready 已生成 / failed 生成失败
+    # 分数与构成是同步落定的，总结没回来不影响分数可用（PRD v1.11 的同步/异步边界）
+    summary_status: Mapped[str] = mapped_column(
+        String(16), default="pending", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MatchFeedback(Base):
+    """HR 对匹配分的异议（PRD §6.8 / BR-22）。
+
+    **只追加、不可删改，也不回写原分数**：本期只落库做样本沉淀，
+    不派生任何下游任务（不做周级聚合 / 归因流程 / 离线微调）。
+    """
+
+    __tablename__ = "match_feedbacks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_score_id: Mapped[int | None] = mapped_column(
+        ForeignKey("match_scores.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    position_id: Mapped[int] = mapped_column(
+        ForeignKey("positions.id", ondelete="CASCADE"), nullable=False
+    )
+    # higher 评分偏高 / lower 评分偏低 / wrong_quote 依据引用错误 /
+    # missing_evidence 证据遗漏 / bad_weight 权重不合理 / other 其他
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    expected_low: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_high: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 提交瞬间的评分快照（不可变），改分后也能回溯当时看到的是什么
+    snapshot_json: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

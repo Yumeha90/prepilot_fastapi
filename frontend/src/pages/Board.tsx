@@ -49,6 +49,15 @@ const SESSION_PROGRESS: Record<string, { color: string }> = {
 /** 还有下一步可走的阶段（终态列不给推进/退回） */
 const FLOW_STAGES = new Set(['pending', 'in_r1', 'in_r2', 'in_hr', 'in_offer'])
 
+/** 匹配分徽章颜色（与 P18 环形分同色系） */
+const MATCH_COLOR: Record<string, string> = {
+  excellent: 'green',
+  good: 'blue',
+  fair: 'orange',
+  low: 'default',
+  vetoed: 'red',
+}
+
 export default function Board() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -61,6 +70,8 @@ export default function Board() {
   const [viewId, setViewId] = useState<number | null>(null)
 
   const canUpload = hasPerm('candidate:upload_resume')
+  // BR-18：面试官没有 match:view，卡片上连入口都不渲染
+  const canMatch = hasPerm('match:view')
 
   const { data, isLoading } = useQuery({
     queryKey: ['board', positionId, keyword],
@@ -237,6 +248,19 @@ export default function Board() {
                           {t(`candidate.sessionStatus.${card.session_status}`)}
                         </Tag>
                       )}
+                      {card.match_score !== null && (
+                        <Tag
+                          color={
+                            card.match_status === 'STALE'
+                              ? 'default'
+                              : MATCH_COLOR[card.match_tier]
+                          }
+                        >
+                          {card.match_status === 'STALE'
+                            ? t('candidate.matchStale')
+                            : `${Math.round(card.match_score)} · ${t(`match.tier.${card.match_tier}`)}`}
+                        </Tag>
+                      )}
                       <Space size={0} wrap>
                         <Button
                           type="link"
@@ -246,6 +270,17 @@ export default function Board() {
                         >
                           {t('candidate.action.viewResume')}
                         </Button>
+                        {canMatch && (
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() =>
+                              void navigate(`/candidates/${card.application_id}/match`)
+                            }
+                          >
+                            {t('candidate.action.viewMatch')}
+                          </Button>
+                        )}
                       </Space>
                       {renderActions(card)}
                     </Space>

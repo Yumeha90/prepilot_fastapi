@@ -24,6 +24,7 @@ import Roles from '@/pages/Roles'
 import Board from '@/pages/Board'
 import CandidateUpload from '@/pages/CandidateUpload'
 import CandidateParse from '@/pages/CandidateParse'
+import MatchDetail from '@/pages/MatchDetail'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
@@ -34,6 +35,8 @@ const protectedRoutes: RouteObject[] = [
   { path: 'candidates', element: <Board /> },
   { path: 'candidates/new', element: <CandidateUpload /> },
   { path: 'candidates/:id/parse', element: <CandidateParse /> },
+  // P18 人岗匹配：按 application 定位（一人一职位下与候选人一一对应）
+  { path: 'candidates/:aid/match', element: <MatchDetail /> },
   { path: 'workbench', element: <Placeholder /> },
   { path: 'evaluations', element: <Placeholder /> },
   { path: 'matches', element: <Placeholder /> },

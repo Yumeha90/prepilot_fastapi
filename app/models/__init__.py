@@ -2,7 +2,7 @@
 from app.models.candidate import Application, Candidate
 from app.models.match_score import CURRENT as SCORE_CURRENT  # noqa: F401  状态常量
 from app.models.match_score import STALE as SCORE_STALE  # noqa: F401
-from app.models.match_score import MatchScore
+from app.models.match_score import MatchFeedback, MatchScore
 from app.models.notification import Notification, NotificationSubscription
 from app.models.position import JdVersion, Position, PositionRound
 from app.models.session import (
@@ -27,6 +27,7 @@ __all__ = [
     "PositionRound",
     "JdVersion",
     "MatchScore",
+    "MatchFeedback",
     "Candidate",
     "Application",
     "InterviewSession",

@@ -13,6 +13,11 @@ export interface BoardCard {
   /** 当轮进展：会话状态；无会话（待派单 / offer 列）为空 */
   session_status: string
   profile_status: string
+  /** 最新人岗匹配分；未计算 / 未参与计算时为 null */
+  match_score: number | null
+  match_tier: string
+  /** CURRENT 有效 / STALE 岗位标准已变更（徽章置灰提示需重算） */
+  match_status: string
   updated_at: string
 }
 

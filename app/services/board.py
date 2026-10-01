@@ -24,6 +24,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.errors import ErrorCode, bad_request, forbidden, not_found
 from app.models.candidate import CONFIRMED, PENDING, Application, Candidate
+from app.models.match_score import CURRENT, MatchScore
 from app.models.position import Position, PositionRound
 from app.models.session import NON_INTERVIEW_ROUNDS, ROUND_STAGE, InterviewSession
 from app.models.user import User
@@ -130,6 +131,9 @@ async def board_data(
     user_ids |= {r.interviewer_id for r in rounds.values() if r.interviewer_id}
     names = await _names(db, user_ids)
 
+    # 匹配分：一次捞全，避免每张卡片一条 SQL
+    scores = await _current_scores(db, [a.id for a in apps])
+
     cards: dict[str, list[BoardCard]] = {s: [] for s in columns}
     summary: dict[str, int] = {}
     for a in apps:
@@ -159,6 +163,9 @@ async def board_data(
                 interviewer_name=interviewer,
                 session_status=sess.status if sess else "",
                 profile_status=cand.profile_status if cand else "",
+                match_score=float(scores[a.id].score) if a.id in scores else None,
+                match_tier=scores[a.id].tier if a.id in scores else "",
+                match_status=scores[a.id].status if a.id in scores else "",
                 updated_at=a.updated_at,
             )
         )
@@ -173,6 +180,25 @@ async def _scopes(db: AsyncSession, user: User) -> dict[str, str]:
     from app.services.rbac import user_data_scopes
 
     return await user_data_scopes(db, user)
+
+
+async def _current_scores(
+    db: AsyncSession, application_ids: list[int]
+) -> dict[int, MatchScore]:
+    """每张卡片的最新有效匹配分（CURRENT 优先，没有则取最后一条 STALE 提示需重算）。"""
+    if not application_ids:
+        return {}
+    rows = await db.scalars(
+        select(MatchScore)
+        .where(MatchScore.application_id.in_(application_ids))
+        .order_by(MatchScore.id.desc())
+    )
+    out: dict[int, MatchScore] = {}
+    for row in rows:
+        prev = out.get(row.application_id or 0)
+        if prev is None or (prev.status != CURRENT and row.status == CURRENT):
+            out[row.application_id or 0] = row
+    return out
 
 
 async def _names(db: AsyncSession, ids: set[int]) -> dict[int, str]:

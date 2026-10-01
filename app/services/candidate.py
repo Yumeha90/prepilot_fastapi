@@ -277,6 +277,17 @@ async def confirm_candidate(
         notice = str(exc.detail.get("message", "派单失败"))
         logger.warning("候选人 %s 确认后派单失败：%s", candidate.id, notice)
 
+    # D12 方案 B：确认即算分 —— 分数同步落定，AI 总结由 Celery 异步补写。
+    # 算分失败只记日志：确认已经生效，不能因为算分挂掉把业务动作回滚掉。
+    try:
+        from app.services import match as match_svc
+
+        for app in list(candidate.applications or []):
+            await match_svc.compute(db, app)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("候选人 %s 确认后算分失败：%s", candidate.id, exc)
+
     if notice:
         # 派单没成就没有新数据要读回来，跳过 refresh（失败路径上少一次 IO 更稳）
         return candidate, notice
