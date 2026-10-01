@@ -53,9 +53,17 @@ async def get_match(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_perm("match:view")),
 ) -> MatchOut:
-    """P18 一屏数据。没有分时只回信息条 + `has_score=False`，不自动算。"""
+    """P18 一屏数据。
+
+    **懒计算**：满足前置条件却还没算过（例如算分能力上线前确认的老数据）
+    时这里补算一次 —— 规则算分不烧 token，让 HR 面对空页面没有意义。
+    已经 STALE 的**不自动重算**（PRD v1.6 定），那是 HR 的显式决策。
+    """
     application, blocked = await _load(db, user, application_id)
     payload = await svc.detail_payload(db, application)
+    if not payload["has_score"] and not blocked:
+        await svc.compute(db, application)
+        payload = await svc.detail_payload(db, application)
     return MatchOut(**payload, blocked_reason=blocked)
 
 

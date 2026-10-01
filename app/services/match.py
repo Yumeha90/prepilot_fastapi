@@ -649,10 +649,9 @@ async def detail_payload(db: AsyncSession, application: Application) -> dict[str
         "evidences": row.evidences if row else [],
         "bonuses": row.bonuses if row else [],
         "summary": row.summary if row else {},
-        "feedbacks": [],
+        # 反馈按 application 查：即便当时没有分（或分还没算）也留过异议，不能丢
+        "feedbacks": await feedback_payload(db, application.id),
     }
-    if row is not None:
-        base["feedbacks"] = await feedback_payload(db, application.id)
     return base
 
 
