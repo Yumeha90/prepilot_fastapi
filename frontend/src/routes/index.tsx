@@ -25,6 +25,7 @@ import Board from '@/pages/Board'
 import CandidateUpload from '@/pages/CandidateUpload'
 import CandidateParse from '@/pages/CandidateParse'
 import MatchDetail from '@/pages/MatchDetail'
+import Lifecycle from '@/pages/Lifecycle'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
@@ -41,7 +42,8 @@ const protectedRoutes: RouteObject[] = [
   { path: 'evaluations', element: <Placeholder /> },
   { path: 'matches', element: <Placeholder /> },
   { path: 'system/roles', element: <Roles /> },
-  { path: 'system/lifecycle', element: <Placeholder /> },
+  // P15 数据生命周期（BR-10 90 天粉碎 + 超管手动粉碎）
+  { path: 'system/lifecycle', element: <Lifecycle /> },
   { path: '403', element: <Forbidden /> },
   { path: '404', element: <NotFound /> },
   { path: '*', element: <Navigate to="/404" replace /> },

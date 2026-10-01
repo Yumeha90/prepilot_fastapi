@@ -3,6 +3,9 @@ from app.models.candidate import Application, Candidate
 from app.models.match_score import CURRENT as SCORE_CURRENT  # noqa: F401  状态常量
 from app.models.match_score import STALE as SCORE_STALE  # noqa: F401
 from app.models.match_score import MatchFeedback, MatchScore
+from app.models.lifecycle import CURRENT as POLICY_CURRENT  # noqa: F401
+from app.models.lifecycle import HISTORY as POLICY_HISTORY  # noqa: F401
+from app.models.lifecycle import PURGE_AUTO, PURGE_MANUAL, RetentionPolicy
 from app.models.notification import Notification, NotificationSubscription
 from app.models.position import JdVersion, Position, PositionRound
 from app.models.session import (
@@ -28,6 +31,7 @@ __all__ = [
     "JdVersion",
     "MatchScore",
     "MatchFeedback",
+    "RetentionPolicy",
     "Candidate",
     "Application",
     "InterviewSession",

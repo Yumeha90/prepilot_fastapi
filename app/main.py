@@ -24,6 +24,7 @@ from app.routers import (
     candidates,
     health,
     jd,
+    lifecycle,
     match,
     me,
     positions,
@@ -85,6 +86,8 @@ def create_app() -> FastAPI:
     app.include_router(board.router, prefix=settings.API_PREFIX)
     # 3.3 人岗匹配 P18（BR-18：面试官没有 match:view，路由级 403）
     app.include_router(match.router, prefix=settings.API_PREFIX)
+    # 3.5 数据生命周期 P15（BR-10 90 天粉碎：策略 + 手动粉碎 + 定时扫描）
+    app.include_router(lifecycle.router, prefix=settings.API_PREFIX)
     return app
 
 

@@ -90,6 +90,8 @@ async def board_data(
         select(Application)
         .options(selectinload(Application.candidate))
         .join(Candidate, Candidate.id == Application.candidate_id)
+        # BR-10 / §7.7：简历已粉碎的候选人不再出现在看板上（行还在，只是没内容可推进）
+        .where(Candidate.purged_at.is_(None))
     )
     if allowed is not None:
         stmt = stmt.where(Application.candidate_id.in_(allowed))

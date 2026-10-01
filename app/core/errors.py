@@ -85,6 +85,11 @@ class ErrorCode:
     # 删除轮次时该轮已有在跑的会话：删了会让会话指向空轮次
     ROUND_IN_USE = "position.round_in_use"
 
+    # 数据生命周期（PRD 3.5.1 P15）
+    LIFECYCLE_DAYS_INVALID = "lifecycle.days_invalid"
+    LIFECYCLE_CONFIRM_REQUIRED = "lifecycle.confirm_required"
+    LIFECYCLE_NOTHING_SELECTED = "lifecycle.nothing_selected"
+
 
 class AppError(HTTPException):
     """带错误码的 HTTP 异常。"""

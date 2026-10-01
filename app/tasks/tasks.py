@@ -38,6 +38,35 @@ def explain_match(self, match_score_id: int) -> bool:
             return False
 
 
+@celery_app.task(name="prepilot.lifecycle.purge_expired", bind=True, max_retries=1)
+def purge_expired_resumes(self) -> dict:
+    """定时粉碎到期简历（BR-10 / §7.7：后台每小时扫描一次）。
+
+    由 celery beat 每小时投递（schedule 见 celery_app.conf.beat_schedule）。
+    策略停用时照样执行、只是不删人，并更新 `last_run_at`，
+    这样页面上能区分「定时任务没跑」与「跑了但策略停用了」。
+    """
+    import asyncio
+
+    from app.core.database import SessionLocal
+    from app.services import lifecycle as lifecycle_svc
+
+    async def _run() -> dict:
+        async with SessionLocal() as db:
+            result = await lifecycle_svc.run_auto_purge(db)
+            return {
+                "enabled": result.enabled,
+                "days": result.days,
+                "scanned": result.scanned,
+                "purged": result.purged,
+            }
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        raise self.retry(exc=exc, countdown=60)
+
+
 @celery_app.task(name="prepilot.mail.send", bind=True, max_retries=2)
 def send_mail(self, to: str, subject: str, body: str) -> None:
     """异步发信（忘记密码验证码）。失败重试 2 次，仍失败则记录日志。"""

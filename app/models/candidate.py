@@ -59,6 +59,9 @@ class Candidate(Base):
     auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 粉碎来源 auto 定时 / manual 超管手动，以及手动时的操作人（定时任务无操作人）
+    purge_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    purged_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

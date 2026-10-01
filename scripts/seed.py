@@ -343,6 +343,36 @@ async def seed_positions(db, users: dict[str, User]) -> int:
     return created
 
 
+async def seed_retention_policy(db, users: dict[str, User]) -> None:
+    """默认保留策略（BR-10：90 天）。
+
+    幂等：已有生效策略就跳过 —— 人工改过的天数不能被 seed 覆盖回去。
+    """
+    from app.models.lifecycle import CURRENT, RESOURCE_RESUME, RetentionPolicy
+    from app.services.lifecycle import DEFAULT_DAYS, DEFAULT_POLICY_NAME
+
+    exists = await db.scalar(
+        select(RetentionPolicy).where(
+            RetentionPolicy.resource == RESOURCE_RESUME,
+            RetentionPolicy.status == CURRENT,
+        )
+    )
+    if exists is not None:
+        return
+    admin = users.get("admin@prepilot.dev")
+    db.add(
+        RetentionPolicy(
+            name=DEFAULT_POLICY_NAME,
+            resource=RESOURCE_RESUME,
+            days=DEFAULT_DAYS,
+            enabled=True,
+            status=CURRENT,
+            created_by=admin.id if admin else None,
+        )
+    )
+    await db.commit()
+
+
 async def seed_notifications(db, users: dict[str, User]) -> None:
     for email, ntype, title, body in NOTIFICATION_SEEDS:
         user = users.get(email)
@@ -382,6 +412,7 @@ async def run() -> int:
             users = await seed_users(db, roles)
             await seed_subscriptions(db, users)
             await seed_notifications(db, users)
+            await seed_retention_policy(db, users)
             positions = await seed_positions(db, users)
             print(f"[ok] 测试用户 {len(users)} 个（统一密码：{DEFAULT_PASSWORD}）")
             print(f"[ok] 演示职位 {positions} 个")
