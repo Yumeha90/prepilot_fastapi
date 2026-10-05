@@ -17,6 +17,12 @@ export interface BoardCard {
   /** 能否进工作台备面：只有被指派给本人的面试官 + 会话未提交（后端判定） */
   can_prepare: boolean
   profile_status: string
+  /**
+   * 历史轮次里最近一条**已提交**面评的会话 id。
+   * 卡片只讲当轮进展（BR-16），推进后上一轮面评就从卡片上消失了；
+   * 后端按 BR-17 判过可见性才下发（面试官只拿得到自己写的）。
+   */
+  history_evaluation_session_id: number | null
   /** 最新人岗匹配分；未计算 / 未参与计算时为 null */
   match_score: number | null
   match_tier: string
@@ -39,7 +45,15 @@ export interface BoardData {
   actions: string[]
 }
 
-export type BoardAction = 'advance' | 'rollback' | 'accept' | 'reject' | 'pool' | 'archive'
+export type BoardAction =
+  | 'advance'
+  | 'rollback'
+  | 'accept'
+  | 'reject'
+  | 'pool'
+  | 'archive'
+  /** 撤销终结处置：回到终结前所在的轮次 */
+  | 'reopen'
 
 export async function fetchBoard(params: {
   position_id?: number

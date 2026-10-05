@@ -5,7 +5,6 @@ import {
   NodeIndexOutlined,
   SettingOutlined,
   TeamOutlined,
-  TrophyOutlined,
 } from '@ant-design/icons'
 
 /**
@@ -58,13 +57,6 @@ export const MENU_ITEMS: MenuItem[] = [
     i18nKey: 'nav.evaluations',
     icon: <FileTextOutlined />,
     anyPerm: ['evaluation:view_all', 'evaluation:view_own'],
-  },
-  {
-    key: 'match',
-    path: '/matches',
-    i18nKey: 'nav.matches',
-    icon: <TrophyOutlined />,
-    anyPerm: ['match:view'],
   },
   {
     key: 'system',

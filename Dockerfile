@@ -42,7 +42,8 @@ COPY ./scripts ./scripts
 
 # 非 root 用户
 RUN useradd --create-home --shell /bin/bash appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /var/lib/prepilot/metrics \
+    && chown -R appuser:appuser /app /var/lib/prepilot
 USER appuser
 
 EXPOSE 8000

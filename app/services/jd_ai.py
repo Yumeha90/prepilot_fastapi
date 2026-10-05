@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.ai.llm import structured_call
 from app.core.errors import ErrorCode, bad_request
+from app.observability import metrics, tracing
 from app.schemas.position import CompetencyIn
 from app.services.position import even_weights, normalize_competencies, normalize_items
 
@@ -56,10 +57,12 @@ SYSTEM_PROMPT = """你是资深招聘顾问，负责把一份 JD 拆成结构化
 6. 原文中确实没有对应内容时，该类返回空数组，宁缺毋滥。"""
 
 
+@tracing.ai_step("jd.parse")
 async def parse_jd(raw_text: str) -> dict:
     """把 JD 原文拆成 {hard_gates, competencies, bonuses}。核心能力权重默认均分。"""
     text = (raw_text or "").strip()
     if len(text) < MIN_JD_CHARS:
+        metrics.record_op("jd.parse", "rejected")
         raise bad_request(
             ErrorCode.JD_TEXT_TOO_SHORT,
             f"JD 原文太短（{len(text)} 字），请先填写或上传完整的 JD 内容",
@@ -86,6 +89,14 @@ async def parse_jd(raw_text: str) -> dict:
     notice = ""
     if len(competencies) < 3:
         notice = f"AI 只拆出 {len(competencies)} 项核心能力，至少需要 3 项，请手动补充后再保存"
+        metrics.record_degraded("jd.parse", "too_few_competencies")
+    # trace 上留下「拆出几项」，复盘「为什么这次拆得少」时不用再去翻库
+    tracing.add_metadata(
+        hard_gates=len(gates),
+        competencies=len(competencies),
+        bonuses=len(bonuses),
+        jd_chars=len(text),
+    )
     return {
         "hard_gates": gates,
         "competencies": competencies,

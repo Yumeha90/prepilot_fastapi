@@ -10,7 +10,7 @@
  *   看不到引用，面试官无法判断这题是「本公司真正在意的」还是通用八股。
  * - **未实现的下一步置灰**：Step3 标 disabled + 说明，不会出现点了报错的半截状态。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -78,24 +78,50 @@ export default function QuestionChain({
   hasMatrix,
   blocked,
   onGenerated,
+  onDirtyChange,
+  roundType = '',
 }: {
   sessionId: number
   chain: ChainOut
   canEdit: boolean
   hasMatrix: boolean
   blocked: string
+  /** 轮次类型：hr 面不检索技术资产库，页面提示要跟着换 */
+  roundType?: string
   onGenerated: () => void
+  /** 把「离开前钩子」交给外层：外层点导航时先调它自动保存，存不下才拦一道确认 */
+  onDirtyChange?: (guard: () => Promise<boolean>) => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [nodes, setNodes] = useState<ChainNode[]>(chain.nodes)
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
 
   // 服务端数据到达（含异步生成完成后）时重置本地草稿
   useEffect(() => {
     setNodes(chain.nodes)
     setDirty(false)
+    dirtyRef.current = false
   }, [chain])
+
+  // 离开时自动保存的动作。ref 持有：mutation 每次渲染都是新对象
+  const saveNowRef = useRef<() => Promise<void>>(async () => {})
+  useEffect(() => {
+    onDirtyChange?.(async () => {
+      if (!canEdit || !dirtyRef.current) return true
+      try {
+        await saveNowRef.current()
+        return !dirtyRef.current
+      } catch {
+        return false
+      }
+    })
+  }, [canEdit, onDirtyChange])
+
+  // 兜底：经侧边菜单或浏览器后退离开时不会走外层导航，卸载前尽力再存一次
+  const flushRef = useRef<() => void>(() => {})
+  useEffect(() => () => flushRef.current(), [])
 
   const errMsg = (error: unknown) => {
     const code = extractErrorCode(error)
@@ -123,6 +149,7 @@ export default function QuestionChain({
     onSuccess: (res) => {
       setNodes(res.chain.nodes)
       setDirty(false)
+      dirtyRef.current = false
       invalidate()
       message.success(t('workbench.chain.msg.saved'))
       if (res.stale) message.warning(t('workbench.chain.msg.stale'))
@@ -135,15 +162,33 @@ export default function QuestionChain({
     onSuccess: (res) => {
       setNodes(res.chain.nodes)
       setDirty(false)
+      dirtyRef.current = false
       invalidate()
       message.success(t('workbench.chain.msg.swapped'))
     },
     onError: (e) => message.error(errMsg(e)),
   })
 
+  const markDirty = () => {
+    setDirty(true)
+    dirtyRef.current = true
+  }
+
+  // 离开时自动保存：与「保存问题链」按钮共用同一段校验（题干不能为空）
+  saveNowRef.current = async () => {
+    if (nodes.some((n) => !n.main_question.trim())) {
+      message.error(t('workbench.chain.mainRequired'))
+      throw new Error('invalid')
+    }
+    await save.mutateAsync()
+  }
+  flushRef.current = () => {
+    if (canEdit && dirtyRef.current) void saveNowRef.current().catch(() => undefined)
+  }
+
   const patch = (index: number, next: Partial<ChainNode>) => {
     setNodes((prev) => prev.map((n, i) => (i === index ? { ...n, ...next } : n)))
-    setDirty(true)
+    markDirty()
   }
 
   const move = (index: number, delta: number) => {
@@ -155,12 +200,12 @@ export default function QuestionChain({
       next[target] = prev[index]
       return next
     })
-    setDirty(true)
+    markDirty()
   }
 
   const remove = (index: number) => {
     setNodes((prev) => prev.filter((_, i) => i !== index))
-    setDirty(true)
+    markDirty()
   }
 
   const handleSave = () => {
@@ -215,7 +260,7 @@ export default function QuestionChain({
       }
     >
       <Paragraph type="secondary" style={{ fontSize: 12 }}>
-        {t('workbench.chain.hint')}
+        {t(roundType === 'hr' ? 'workbench.chain.hintHr' : 'workbench.chain.hint')}
       </Paragraph>
 
       {running && (
@@ -223,7 +268,11 @@ export default function QuestionChain({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={t('workbench.chain.generating')}
+          message={
+            roundType === 'hr'
+              ? t('workbench.chain.generatingHr')
+              : t('workbench.chain.generating')
+          }
           description={
             <Skeleton active paragraph={{ rows: 2 }} title={{ width: '40%' }} />
           }
@@ -522,7 +571,7 @@ export default function QuestionChain({
           style={{ marginTop: 12 }}
           onClick={() => {
             setNodes((prev) => [...prev, emptyNode(prev.length)])
-            setDirty(true)
+            markDirty()
           }}
         >
           {t('workbench.chain.addNode')}

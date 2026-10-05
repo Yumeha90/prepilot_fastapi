@@ -38,6 +38,11 @@ class BoardCard(BaseModel):
     can_prepare: bool = False
     # 简历侧状态：uploading / parsed / confirmed / archived（卡片上提示"待确认"）
     profile_status: str = ""
+    # 历史轮次里最近一条**已提交**面评的会话 id（当前轮次的面评另走 session_id）。
+    # 卡片只反映"当前所在轮次"（BR-16），HR 推进到二面后一面的面评就不再是当轮产物；
+    # 但它必须还能被看到 —— 由后端按 BR-17 判定可见性后下发，
+    # 面试官拿不到别人的历史面评 id，改前端也换不出来。
+    history_evaluation_session_id: int | None = None
     # 最新人岗匹配分（BR-21 只显示分，解释在 P18）：无分 / 未参与计算时为 None
     match_score: float | None = None
     match_tier: str = ""
@@ -66,9 +71,10 @@ class TransitionIn(BaseModel):
     advance  推进到流程配置里的**下一轮**（pending → 首轮）
     rollback 退回上一轮
     accept / reject / pool / archive  终结处置（录用 / 淘汰 / 人才库 / 作废）
+    reopen   撤销终结处置，回到终结前所在的轮次（终结时不动派单，故能算回去）
     """
 
-    action: str = Field(pattern="^(advance|rollback|accept|reject|pool|archive)$")
+    action: str = Field(pattern="^(advance|rollback|accept|reject|pool|archive|reopen)$")
 
 
 class TransitionOut(BaseModel):

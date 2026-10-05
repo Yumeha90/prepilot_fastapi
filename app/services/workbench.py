@@ -14,6 +14,7 @@ HR 代填会让「谁是这份面评的责任人」变得含糊，也不符合 B
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -26,12 +27,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.llm import structured_call
 from app.core.config import get_settings
 from app.core.errors import ErrorCode, bad_request, not_found
-from app.models.candidate import Candidate
+from app.models.candidate import Application, Candidate
 from app.models.position import Position
 from app.models.session import (
+    CHAIN_READY,
     EVIDENCE_MISSING,
     EVIDENCE_STATUSES,
     EVIDENCE_VERIFY,
+    FAIRNESS_PASS,
+    FAIRNESS_WARN,
     ROW_SOURCE_JD,
     ROW_SOURCE_MANUAL,
     ROW_SOURCE_RESUME,
@@ -45,6 +49,8 @@ from app.models.session import (
     InterviewSession,
 )
 from app.models.user import User
+from app.observability import metrics, tracing
+from app.services import round_profile
 from app.schemas.workbench import (
     ChainOut,
     DurationIn,
@@ -69,6 +75,9 @@ def chain_out(session: InterviewSession) -> ChainOut:  # noqa: F401 —— 供�
 # 矩阵行数上限：JD 能力项一般 3–6 条，给 AI 从简历补充留一倍余量。
 # 超过这个数面试官在 45 分钟里根本问不完，矩阵就失去「聚焦」的意义。
 MAX_ROWS = 12
+# 下限 2（BR-07 兜底）：结论为「不通过」要求 ≥2 项评分 ≤2，只有 1 个能力项时
+# 这条规则永远无法被满足，与其让面试官卡在提交，不如在矩阵这一层就把下限卡住
+MIN_MATRIX_ROWS = 2
 MAX_CAPABILITY_LEN = 100
 MAX_EVIDENCE_LEN = 300
 MAX_FOCUS_LEN = 200
@@ -77,10 +86,9 @@ MAX_FOCUS_LEN = 200
 # 超长简历本来已在 C2 分块解析过，这里用解析结果 + 原文前段足够定位证据
 RESUME_SNIPPET_CHARS = 6_000
 
-# Step1–Step5 的步骤指示器；Step3 之后还没实现，标记 disabled 而不是 todo ——
-# 点了报错比点了没反应更糟
+# Step1–Step5 已实现
 STEP_KEYS = ("step1", "step2", "step3", "step4", "step5")
-IMPLEMENTED_STEPS = 2
+IMPLEMENTED_STEPS = 5
 STATUS_STEP_INDEX = {
     S1_DRAFT: 0,
     S2_DRAFT: 1,
@@ -88,6 +96,8 @@ STATUS_STEP_INDEX = {
     S4_DRAFT: 3,
     S5_DRAFT: 4,
 }
+# Step3 的完成信号来自公平性结论：通过 / 警告都算过了，阻断不算
+FAIRNESS_DONE_RESULTS = (FAIRNESS_PASS, FAIRNESS_WARN)
 
 
 def _now() -> datetime:
@@ -97,16 +107,29 @@ def _now() -> datetime:
 # ---------------------------------------------------------------- 权限
 
 
-def can_edit(user: User, session: InterviewSession) -> bool:
-    """只有被指派给本人的面试官、且会话未提交时才能写。"""
+def can_edit(
+    user: User, session: InterviewSession, *, round_current: bool = True
+) -> bool:
+    """只有被指派给本人的面试官、且会话未提交时才能写。
+
+    `round_current=False` 表示**这一轮还没轮到**（应聘记录当前在别的轮次，
+    例如 HR 把张三退回了一面、二面会话却还留在库里）：此时二面面试官即便拿到了
+    会话也不该备面 —— 轮次没到就写面评，等于替一个还没发生的面试出结论。
+    """
+    if not round_current:
+        return False
     return session.interviewer_id == user.id and session.status != SUBMITTED
 
 
-def read_only_reason(user: User, session: InterviewSession) -> str:
-    if can_edit(user, session):
+def read_only_reason(
+    user: User, session: InterviewSession, *, round_current: bool = True
+) -> str:
+    if can_edit(user, session, round_current=round_current):
         return ""
     if session.status == SUBMITTED:
         return "submitted"
+    if not round_current:
+        return "not_current_round"
     return "read_only"
 
 
@@ -127,6 +150,112 @@ def clean_text(text: str) -> str:
     """去编号 / 项目符号 / 多余空白（模型偶发吐出 `1. ` 这类前缀）。"""
     s = re.sub(r"^(?:[0-9]+[.、)）:：]\s*|[-*•·▪◦]\s*)", "", str(text or "").strip())
     return re.sub(r"\s+", " ", s).strip()
+
+
+# ------------------------------------------------- 模型输出 → 人能读的文本
+
+# 模型偶发把某个字段写成 JSON（字符串里套一段 JSON，或直接给个对象），
+# 页面上就会原样显示 `{"type": "bad", "desc": "..."}`。题目与观察点是**给人读的**，
+# 一律拆开取正文再展示 —— 显示结构化数据等于把模型的内部分类漏给用户。
+
+_JSON_BODY_KEYS = (
+    "desc",
+    "description",
+    "text",
+    "content",
+    "detail",
+    "point",
+    "observation",
+    "描述",
+    "说明",
+)
+_JSON_TYPE_KEYS = ("type", "kind", "label", "level", "类别", "类型")
+_GOOD_WORDS = {"good", "positive", "strength", "strong", "优秀", "好", "达标"}
+_BAD_WORDS = {"bad", "negative", "weakness", "weak", "不足", "差", "不达标"}
+
+
+def _try_json(text: str) -> Any | None:
+    """只在**看起来就是 JSON** 时才解析，避免把正常句子送进 json.loads 白跑一趟。"""
+    s = str(text or "").strip()
+    if len(s) >= 2 and s[0] in "{[" and s[-1] in "}]":
+        try:
+            return json.loads(s)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _dict_text(data: dict) -> str:
+    """字典 → 正文：优先正文键，没有就把其余字段的文本拼起来。"""
+    body = ""
+    for key in _JSON_BODY_KEYS:
+        value = data.get(key)
+        if value is None:
+            continue
+        text = plain_text(value)
+        if text:
+            body = text
+            break
+    if not body:
+        body = "；".join(
+            p
+            for p in (
+                # 纯数字 / 布尔不参与拼接：拼出来是个孤立的 "1"，比留空更让人困惑
+                plain_text(v)
+                for k, v in data.items()
+                if k not in _JSON_TYPE_KEYS and not isinstance(v, (int, float, bool))
+            )
+            if p
+        )
+    if not body:
+        return ""
+    # 正文里再套一层 JSON 也要拆干净；拆出来是空的就保留原文（丢了比难看更糟）
+    inner = _try_json(body)
+    if isinstance(inner, (dict, list)):
+        unwrapped = plain_text(inner)
+        if unwrapped:
+            return unwrapped
+    return body
+
+
+def plain_text(value: Any) -> str:
+    """模型输出的文本字段 → 人能读的一句话（JSON 拆开取正文，其余原样）。"""
+    if isinstance(value, dict):
+        return _dict_text(value)
+    if isinstance(value, list):
+        return "；".join(p for p in (plain_text(v) for v in value) if p)
+    text = str(value or "").strip()
+    parsed = _try_json(text)
+    if isinstance(parsed, dict):
+        return _dict_text(parsed)
+    if isinstance(parsed, list):
+        return "；".join(p for p in (plain_text(v) for v in parsed) if p)
+    return text
+
+
+def observation_text(value: Any) -> str:
+    """评分观察点 → 人能读的一句话。
+
+    `type: good / bad` 这种内部分类**只转成「好 / 差」前缀**，不把 JSON 抛给用户。
+    """
+    if isinstance(value, dict):
+        body = _dict_text(value)
+        raw = str(next((value[k] for k in _JSON_TYPE_KEYS if value.get(k)), "") or "").strip()
+        if not body:
+            return ""
+        low = raw.lower()
+        if low in _GOOD_WORDS:
+            return f"好：{body}"
+        if low in _BAD_WORDS:
+            return f"差：{body}"
+        return body
+    text = str(value or "").strip()
+    parsed = _try_json(text)
+    if isinstance(parsed, dict):
+        return observation_text(parsed)
+    if isinstance(parsed, list):
+        return "；".join(p for p in (observation_text(v) for v in parsed) if p)
+    return plain_text(text)
 
 
 def _rows_from_json(session: InterviewSession) -> tuple[list[dict], bool, str, str]:
@@ -172,13 +301,65 @@ def _as_weight(value: Any) -> float | None:
         return None
 
 
+def _matrix_done(session: InterviewSession) -> bool:
+    """Step1 看产物：矩阵里有能力项就算过了（AI 生成的和手填的都算）。"""
+    rows, _generated, _at, _model = _rows_from_json(session)
+    return bool(rows)
+
+
+def _chain_done(session: InterviewSession) -> bool:
+    """Step2 看产物：生成（或手改）成功且链里有节点。running / failed 都不算。"""
+    return session.chain_status == CHAIN_READY and bool(
+        (session.chain_json or {}).get("nodes")
+    )
+
+
+def _fairness_done(session: InterviewSession) -> bool:
+    """Step3 看结论：通过 / 警告都算过了，阻断与「还没扫」都不算。"""
+    return str((session.fairness_json or {}).get("result") or "") in FAIRNESS_DONE_RESULTS
+
+
+def _evaluation_done(session: InterviewSession) -> bool:
+    """Step4 看产物：所有能力项都打过分且写了依据（后端保存时算好）。"""
+    return bool((session.evaluation_json or {}).get("complete"))
+
+
+def invalidate_fairness(session: InterviewSession) -> None:
+    """问题链变了 → 旧的公平性结论作废。
+
+    **为什么必须作废**：结论是针对**当时那一版问题**给的。生成新链或改了题目之后
+    还挂着上一次的「通过」，进度条就打勾了 —— 面试官看到绿灯直接往下走，
+    等于拿一份没验证过的结论放行（§6.5 的红灯形同虚设）。
+    这里只清结论，不动会话状态：回到 Step3 重新扫一次即可，不需要从头备面。
+    """
+    session.fairness_json = {}
+    session.fairness_revision = 0
+    session.fairness_updated_at = None
+
+
 def _steps(session: InterviewSession) -> list[WorkbenchStep]:
+    """进度条按**产物**判定，不看会话状态。
+
+    早期版本拿 `session.status` 换算成第几步，再用 `i < current` 打勾 ——
+    状态一旦跑到产物前面（例如面评写完了、状态已推进，或这条会话曾经提交过），
+    后面的步骤就会被"提前打勾"：问题链刚重新生成，Step3 却显示已通过。
+    进度条要回答的是「这一步的东西做完了吗」，那就只能看这一步的产物。
+    """
     if session.status == SUBMITTED:
         return [WorkbenchStep(key=k, state="done") for k in STEP_KEYS]
-    current = STATUS_STEP_INDEX.get(session.status, 0)
+
+    done = [
+        _matrix_done(session),
+        _chain_done(session),
+        _fairness_done(session),
+        _evaluation_done(session),
+        False,  # Step5 只有提交才算完成，提交已在上一段返回全 done
+    ]
+    # 当前步骤 = 第一个还没完成的；全做完了就停在最后一步
+    current = next((i for i, ok in enumerate(done) if not ok), len(done) - 1)
     out: list[WorkbenchStep] = []
     for i, key in enumerate(STEP_KEYS):
-        if i < current:
+        if done[i]:
             state = "done"
         elif i == current:
             state = "current"
@@ -201,6 +382,20 @@ def blocked_reason(candidate: Candidate | None, position: Position | None) -> st
     return ""
 
 
+async def _is_current_round(db: AsyncSession, session: InterviewSession) -> bool:
+    """这条会话是不是应聘记录**当前所在轮次**的会话。
+
+    没关联应聘记录、或记录上还没写当前轮次（历史数据）时按「是」处理，
+    避免把老数据一刀切判成不可编辑。
+    """
+    if not session.application_id:
+        return True
+    application = await db.get(Application, session.application_id)
+    if application is None or application.current_round_id is None:
+        return True
+    return application.current_round_id == session.round_id
+
+
 async def workbench_view(
     db: AsyncSession, user: User, session_id: int
 ) -> WorkbenchOut:
@@ -215,6 +410,12 @@ async def workbench_view(
     candidate = await db.get(Candidate, session.candidate_id)
     position = await db.get(Position, session.position_id)
     interviewer = await db.get(User, session.interviewer_id)
+    # 这一轮是不是"现在该面的那一轮"：退回 / 提前建下一轮都会留下不属于当前轮次的会话
+    round_current = await _is_current_round(db, session)
+
+    from app.services import fairness as fairness_svc
+    from app.services import evaluation as evaluation_svc
+    from app.services import submission as submission_svc
 
     return WorkbenchOut(
         session_id=session.id,
@@ -229,10 +430,13 @@ async def workbench_view(
         interviewer_name=(interviewer.full_name or interviewer.email) if interviewer else "",
         status=session.status,
         duration_minutes=session.duration_minutes,
-        can_edit=can_edit(user, session),
-        read_only_reason=read_only_reason(user, session),
+        can_edit=can_edit(user, session, round_current=round_current),
+        read_only_reason=read_only_reason(user, session, round_current=round_current),
         matrix=_matrix_out(session),
         chain=chain_out(session),
+        fairness=fairness_svc.fairness_out(session),
+        evaluation=evaluation_svc.evaluation_out(session),
+        submission=submission_svc.submission_out(session),
         steps=_steps(session),
         blocked_reason=blocked_reason(candidate, position),
     )
@@ -253,7 +457,35 @@ class _MatrixLLM(BaseModel):
     rows: list[_RowLLM] = Field(default_factory=list)
 
 
-MATRIX_SYSTEM_PROMPT = """你是资深面试官，负责为一场面试准备「能力-证据矩阵」。
+MATRIX_SYSTEM_PROMPT_HR = """你是资深 HR 面试官，负责为一场 **HR 面**准备「能力-证据矩阵」。
+
+HR 面评价的不是技术能力（那些由技术面判定），而是这个人**能不能来、待得住、要多少、为什么走**。
+所以本轮用 HR 通用维度作为考察项，而不是岗位 JD 里的技术能力项。
+
+你会拿到：① HR 通用考察维度清单 ② 候选人的简历（结构化档案 + 原文片段）。
+请逐项判断简历里的证据，并给出本轮的考察重点。
+
+严格要求：
+1. **只依据给定材料**，禁止编造简历里没有的经历、数字或薪资。
+2. `capability` **优先照抄维度清单里的原词**（允许按候选人情况微调措辞），
+   最多再补 2 项「简历里有明确信号、值得 HR 面确认」的项，标 `source=resume`
+   （例如某段任职只有 8 个月、或简历写明可立即到岗）。
+3. 薪资维度**只有在简历里写明期望时才给证据**；简历没写就判 missing，
+   **不要猜测数字**，也不要写「需面谈确认」之外的具体区间。
+4. `evidence` 是**证据摘要**，尽量引用简历原话中的短句（不超过 60 字），
+   让 HR 一眼看到依据在哪。判定为 missing 时留空字符串，不要写"无""未提及"之类的占位词。
+5. `status` 三选一：
+   - sufficient：简历中有明确、可直接采信的证据
+   - verify：提到了但不足以采信（表述模糊、或需要面试中确认）
+   - missing：简历中找不到依据
+6. `focus` 写**这一项在 HR 面里具体要问出什么**（不超过 80 字），
+   不要写"重点考察稳定性"这种空话。证据充足时写"如何验证真实性/边界"，
+   缺失时写"如何判断是否具备/如何降低风险"。
+7. **合规红线**：考察点不得涉及婚育计划、年龄、户籍民族宗教、健康与残疾；
+   稳定性只能从过往任职事实推断，薪资只谈期望区间、不碰现薪与家庭收支。
+8. 输出不超过 12 行，按上面维度清单的顺序排列（source=resume 的行排在最后）。"""
+
+MATRIX_SYSTEM_PROMPT_TECH = """你是资深面试官，负责为一场面试准备「能力-证据矩阵」。
 
 你会拿到：① 岗位的核心能力项（含权重）② 候选人的简历（结构化档案 + 原文片段）。
 请逐项判断简历里的证据，并给出本轮的考察重点。
@@ -272,6 +504,43 @@ MATRIX_SYSTEM_PROMPT = """你是资深面试官，负责为一场面试准备「
    不要写"重点考察沟通能力"这种空话。证据充足时写"如何验证深度/边界"，
    缺失时写"如何判断是否具备/如何降低风险"。
 6. 输出不超过 12 行，按权重从高到低排列（source=resume 的行排在最后）。"""
+
+
+MATRIX_SYSTEM_PROMPT = MATRIX_SYSTEM_PROMPT_TECH  # 技术面是默认分支
+
+
+def matrix_system_prompt(round_type: str | None) -> str:
+    return (
+        MATRIX_SYSTEM_PROMPT_HR
+        if round_profile.is_hr_round(round_type)
+        else MATRIX_SYSTEM_PROMPT_TECH
+    )
+
+
+def matrix_prompt(
+    position: Position,
+    candidate: Candidate,
+    *,
+    round_type: str = "",
+    round_name: str = "",
+) -> str:
+    """C3 的 user prompt。抽成纯函数是为了能直接测：HR 面与技术面喂给模型的
+    是两套坐标系，光看 `generate_matrix` 的主流程看不出来到底喂了什么。"""
+    if round_profile.is_hr_round(round_type):
+        # HR 面不按 JD 能力项出题：JD 权重对 HR 维度没有意义，
+        # 硬套只会让 HR 拿到一张「分布式事务：缺失」的表，而那不是他这轮要判的
+        return (
+            f"岗位：{position.name}｜轮次：{round_name or 'HR 面'}\n\n"
+            f"【HR 面通用考察维度】\n{round_profile.hr_dimension_lines()}\n\n"
+            f"【合规红线（违反即不合格）】\n{round_profile.hr_redline_lines()}\n\n"
+            f"【候选人简历】\n{resume_digest(candidate)}"
+        )
+    comp_lines = _competency_lines(position)
+    return (
+        f"岗位：{position.name}\n\n"
+        f"【岗位核心能力项】\n{comp_lines}\n\n"
+        f"【候选人简历】\n{resume_digest(candidate)}"
+    )
 
 
 def _competency_lines(position: Position) -> str:
@@ -405,6 +674,7 @@ def _merge_keys(old_rows: list[dict], new_rows: list[dict]) -> list[dict]:
     return new_rows
 
 
+@tracing.ai_step("matrix.generate")
 async def generate_matrix(
     db: AsyncSession, user: User, session: InterviewSession
 ) -> MatrixSaveOut:
@@ -423,34 +693,39 @@ async def generate_matrix(
         )
 
     assert candidate is not None and position is not None  # blocked_reason 已保证
-    comp_lines = _competency_lines(position)
-    if not comp_lines:
+    if not round_profile.is_hr_round(session.round_type) and not _competency_lines(position):
         raise bad_request(
             ErrorCode.WORKBENCH_NO_JD, "该职位还没有确认的核心能力项，无法生成能力-证据矩阵"
         )
-
-    prompt = (
-        f"岗位：{position.name}\n\n"
-        f"【岗位核心能力项】\n{comp_lines}\n\n"
-        f"【候选人简历】\n{resume_digest(candidate)}"
+    prompt = matrix_prompt(
+        position,
+        candidate,
+        round_type=session.round_type,
+        round_name=session.round_name,
     )
-    data = await _call_llm(prompt)
+    data = await _call_llm(prompt, system=matrix_system_prompt(session.round_type))
     rows = _normalize_rows(list(data.rows), position)
-    if not rows:
-        raise bad_request(ErrorCode.LLM_FAILED, "AI 未产出有效的能力项，请重试")
+    # 下限 2 而不是 1（MIN_MATRIX_ROWS）：BR-07 要求「不通过」结论至少 2 项评分 ≤2，
+    # 只生成 1 项能力等于锁死这条规则。JD 有 ≥3 项能力（BR-03），落到 1 项说明这
+    # 次生成不可用，让它重试而不是存一份无解的矩阵
+    if len(rows) < MIN_MATRIX_ROWS:
+        raise bad_request(
+            ErrorCode.LLM_FAILED,
+            f"AI 只产出 {len(rows)} 个能力项（至少需 {MIN_MATRIX_ROWS} 个），请重试",
+        )
 
     old_rows, _, _, _ = _rows_from_json(session)
     rows = _merge_keys(old_rows, rows)
     return await _persist(db, session, rows, generated=True)
 
 
-async def _call_llm(prompt: str) -> _MatrixLLM:
+async def _call_llm(prompt: str, system: str = MATRIX_SYSTEM_PROMPT) -> _MatrixLLM:
     import asyncio
 
     return await asyncio.to_thread(
         structured_call,
         _MatrixLLM,
-        MATRIX_SYSTEM_PROMPT,
+        system,
         prompt,
         timeout=120,
     )
@@ -492,8 +767,12 @@ async def save_matrix(
         )
         if len(rows) >= MAX_ROWS:
             break
-    if not rows:
-        raise bad_request(ErrorCode.WORKBENCH_MATRIX_INVALID, "矩阵至少要有 1 个能力项")
+    # 人工保存同样卡下限 2：能力项可以删，但不能删到「下不了不通过结论」的程度
+    if len(rows) < MIN_MATRIX_ROWS:
+        raise bad_request(
+            ErrorCode.WORKBENCH_MATRIX_INVALID,
+            f"矩阵至少要有 {MIN_MATRIX_ROWS} 个能力项：结论为「不通过」时需要 ≥2 项评分 ≤2（BR-07）",
+        )
 
     stale = payload.revision is not None and payload.revision != (session.matrix_revision or 0)
     return await _persist(db, session, rows, generated=bool(session.matrix_json), stale=stale)

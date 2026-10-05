@@ -47,7 +47,9 @@ const SESSION_PROGRESS: Record<string, { color: string }> = {
 }
 
 /** 还有下一步可走的阶段（终态列不给推进/退回） */
-const FLOW_STAGES = new Set(['pending', 'in_r1', 'in_r2', 'in_hr', 'in_offer'])
+const FLOW_STAGES = new Set(['pending', 'in_r1', 'in_r2', 'in_hr'])
+/** 终结处置后的阶段：卡片仍要看得见（v1.24 accepted 也成列），但要给撤销入口 */
+const TERMINAL_STAGES = new Set(['accepted', 'rejected', 'in_pool', 'archived'])
 
 /** 匹配分徽章颜色（与 P18 环形分同色系） */
 const MATCH_COLOR: Record<string, string> = {
@@ -72,6 +74,9 @@ export default function Board() {
   const canUpload = hasPerm('candidate:upload_resume')
   // BR-18：面试官没有 match:view，卡片上连入口都不渲染
   const canMatch = hasPerm('match:view')
+  // P17 入口：HR（view_all）看全部已提交面评，面试官（view_own）看本人那条
+  const canViewEvaluation =
+    hasPerm('evaluation:view_all') || hasPerm('evaluation:view_own')
 
   const { data, isLoading } = useQuery({
     queryKey: ['board', positionId, keyword],
@@ -114,7 +119,25 @@ export default function Board() {
   const actions = useMemo(() => new Set(data?.actions ?? []), [data?.actions])
 
   const renderActions = (card: BoardCard) => {
-    if (!actions.size || !FLOW_STAGES.has(card.stage)) return null
+    if (!actions.size) return null
+    // 已终结处置：不给推进/退回，但必须能撤销 —— 手滑点错一个「录用 / 淘汰」
+    // 就永久钉死的话，HR 只能找人改库
+    if (TERMINAL_STAGES.has(card.stage)) {
+      if (!actions.has('reopen')) return null
+      return (
+        <Button
+          type="link"
+          size="small"
+          loading={transition.isPending}
+          onClick={() =>
+            transition.mutate({ applicationId: card.application_id, action: 'reopen' })
+          }
+        >
+          {t('candidate.action.reopen')}
+        </Button>
+      )
+    }
+    if (!FLOW_STAGES.has(card.stage)) return null
     const items = [
       { key: 'accept', label: t('candidate.action.accept') },
       { key: 'reject', label: t('candidate.action.reject') },
@@ -262,10 +285,29 @@ export default function Board() {
                         </Tag>
                       )}
                       <Space size={0} wrap>
+                        {/* 待确认的简历：解析确认是 pending 卡片的**主入口**。
+                            之前只能「查看 AI 匹配 → 再点去解析确认」，等于把主流程藏了两层 */}
+                        {canUpload &&
+                          card.profile_status &&
+                          card.profile_status !== 'confirmed' && (
+                            <Button
+                              type="link"
+                              size="small"
+                              style={{ paddingLeft: 0 }}
+                              onClick={() =>
+                                void navigate(`/candidates/${card.candidate_id}/parse`)
+                              }
+                            >
+                              {t('candidate.action.goParse')}
+                            </Button>
+                          )}
                         <Button
                           type="link"
                           size="small"
-                          style={{ paddingLeft: 0 }}
+                          style={{
+                            paddingLeft:
+                              canUpload && card.profile_status !== 'confirmed' ? undefined : 0,
+                          }}
                           onClick={() => setViewId(card.candidate_id)}
                         >
                           {t('candidate.action.viewResume')}
@@ -288,6 +330,35 @@ export default function Board() {
                             }
                           >
                             {t('candidate.action.viewMatch')}
+                          </Button>
+                        )}
+                        {/* P17：面评已提交才可看（BR-17）。面试官看的是本人写的那条，
+                            HR 看全部 —— 后端还会再校一次权限 */}
+                        {canViewEvaluation &&
+                          card.session_id &&
+                          card.session_status === 'submitted' && (
+                            <Button
+                              type="link"
+                              size="small"
+                              onClick={() => void navigate(`/evaluations/${card.session_id}`)}
+                            >
+                              {t('candidate.action.viewEvaluation')}
+                            </Button>
+                          )}
+                        {/* 历史轮次的面评：卡片只讲"当前卡在哪一轮"（BR-16），
+                            推进到下一轮后上一轮的面评会从卡片上消失。
+                            消失是对的，但面评不能找不到 —— 后端按 BR-17 判过可见性后才下发 id */}
+                        {card.history_evaluation_session_id && (
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() =>
+                              void navigate(
+                                `/evaluations/${card.history_evaluation_session_id}`,
+                              )
+                            }
+                          >
+                            {t('candidate.action.viewPastEvaluation')}
                           </Button>
                         )}
                       </Space>
@@ -319,6 +390,19 @@ export default function Board() {
         title={t('candidate.action.viewResume')}
         width={720}
         onClose={() => setViewId(null)}
+        extra={
+          canUpload && detail && detail.profile_status !== 'confirmed' ? (
+            <Button
+              type="primary"
+              onClick={() => {
+                setViewId(null)
+                void navigate(`/candidates/${detail.id}/parse`)
+              }}
+            >
+              {t('candidate.action.goParse')}
+            </Button>
+          ) : null
+        }
       >
         {detail && (
           <>
@@ -326,6 +410,7 @@ export default function Board() {
               <Text strong>{detail.name}</Text>
               <Text type="secondary"> · {detail.contact_email}</Text>
               <br />
+              <Tag>{t(`candidate.status.${detail.profile_status}`)}</Tag>
               <Text type="secondary">
                 {detail.applications?.[0]?.position_name || '—'}
                 {detail.applications?.[0]?.stage

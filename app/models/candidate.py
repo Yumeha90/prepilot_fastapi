@@ -38,7 +38,7 @@ ARCHIVED = "archived"
 # 流程侧状态
 PENDING = "pending"
 IN_R1 = "in_r1"
-STAGES = (PENDING, IN_R1, "in_r2", "in_hr", "in_offer", "accepted", "rejected", "in_pool", "archived")
+STAGES = (PENDING, IN_R1, "in_r2", "in_hr", "accepted", "rejected", "in_pool", "archived")
 
 
 class Candidate(Base):

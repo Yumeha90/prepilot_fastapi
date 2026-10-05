@@ -13,7 +13,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ErrorCode, bad_request, forbidden, not_found
@@ -49,12 +49,11 @@ async def visible_candidate_ids(
 ) -> list[int] | None:
     """返回该用户可见的候选人 id 列表；None 表示不限制（all）。
 
-    方案 a（2026-09-30 拍板）：面试官的数据范围是 `assigned`，但 D5 派单派的是
-    **首轮**面试官 —— 若上传者是 r2 面试官，派单后他自己反而看不到了。
-    因此这里额外放开 `created_by = 自己`，让上传者能跟踪自己提交的候选人。
+    面试官的数据范围是 `assigned`：只看**派给自己的会话对应的候选人**（BR-14 写死版）。
 
-    S2 起再并上「存在 interviewer_id = 自己 的会话」：派给谁的面试，谁就能看到
-    这个候选人（否则面试官登录后列表是空的，等于派了个看不见的单）。
+    v1.11 曾额外放开 `created_by = 自己`（怕 r2 面试官上传后自己看不到），
+    2026-10-04 随 BR-15 方案①一并收回：面试官不再参与建档（无 `candidate:upload_resume`），
+    「自己上传的」这个分支失去存在理由，留着只会让 BR-14 出现两种互相矛盾的读法。
     """
     scope = scopes.get("candidate", "all")
     if scope == "all":
@@ -62,11 +61,7 @@ async def visible_candidate_ids(
     assigned = select(InterviewSession.candidate_id).where(
         InterviewSession.interviewer_id == user.id
     )
-    rows = await db.scalars(
-        select(Candidate.id).where(
-            or_(Candidate.created_by == user.id, Candidate.id.in_(assigned))
-        )
-    )
+    rows = await db.scalars(select(Candidate.id).where(Candidate.id.in_(assigned)))
     return list(set(rows))
 
 

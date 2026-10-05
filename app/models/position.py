@@ -84,7 +84,7 @@ class PositionRound(Base):
     )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(100), default="", nullable=False)
-    # r1 技术一面 / r2 技术二面 / hr HR 面 / offer Offer 审批（终结节点，不是面试）
+    # r1 技术一面 / r2 技术二面 / hr HR 面（v1.26 起无 offer 轮）
     type: Mapped[str] = mapped_column(String(8), nullable=False)
     interviewer_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), index=True, nullable=True

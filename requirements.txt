@@ -57,6 +57,11 @@ langgraph==0.2.76
 pymilvus==3.0.2
 langfuse==4.15.6
 
+# ---- 可观测性（/metrics 抓取端，Prometheus 文本格式）----
+# 多进程模式（PROMETHEUS_MULTIPROC_DIR）用它把 api 与 celery worker 的指标汇总到一处，
+# 否则 worker 里的 AI 调用（问题链生成、匹配解释）在 Grafana 上完全是黑的。
+prometheus_client==0.22.1
+
 # ---- 文件解析（JD 上传 / 简历解析：只抽纯文本，不做 OCR）----
 # 2026-09-30 核对：pdfplumber 及其间接依赖（pdfminer.six / Pillow / lxml / pypdfium2）
 # 均有 linux wheel，不会在 python:3.12-slim 镜像里触发源码编译。

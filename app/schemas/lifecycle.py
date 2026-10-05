@@ -73,6 +73,8 @@ class PurgeOut(BaseModel):
     skipped_accepted: int = 0
     skipped_missing: int = 0
     purged_ids: list[int] = Field(default_factory=list)
+    # 顺带清掉面评正文的会话数（面评原文同属粉碎范围，见 §10）
+    evaluations_purged: int = 0
 
 
 class AutoPurgeOut(BaseModel):

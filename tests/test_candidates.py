@@ -347,42 +347,118 @@ async def _scenario_upload_parse_confirm() -> None:
         assert cards[0]["position_id"] == pid
 
 
+async def _new_position(
+    client: AsyncClient, headers: dict[str, str], rounds: list[dict]
+) -> int:
+    """自建一个「JD 已确认 + 流程已配置」的职位，避免依赖库里残留数据。"""
+    created = await client.post(
+        "/api/positions",
+        json={"name": f"pytest-可见性{uuid.uuid4().hex[:6]}"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    pid = created.json()["id"]
+
+    jd = await client.put(
+        f"/api/positions/{pid}/jd",
+        json={
+            "raw_text": "高级后端工程师",
+            "hard_gates": ["本科及以上"],
+            "competencies": [
+                {"text": "Java", "weight": 40},
+                {"text": "数据库", "weight": 35},
+                {"text": "微服务", "weight": 25},
+            ],
+            "bonuses": [],
+            "confirm": True,
+        },
+        headers=headers,
+    )
+    assert jd.status_code == 200, jd.text
+
+    resp = await client.put(
+        f"/api/positions/{pid}/rounds", json={"rounds": rounds}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    return pid
+
+
+# seed：7 interviewer（陈技术）/ 8 interviewer2（刘架构）/ 3 hr_lead（李主管）
+IV_R1 = 7
+IV_R2 = 8
+HR_LEAD = 3
+
+
 async def _scenario_visibility() -> None:
-    """方案 a：面试官只看自己上传的；他人上传的 403。"""
+    """方案 a：面试官只看「自己上传的」+「派给自己的」；他人的 403。
+
+    ⚠️ 早期版本复用库里第一个已确认职位，结果取决于当时残留数据（职位是否派给
+    该面试官、应聘记录停在哪一轮），跑几轮就随机失败。这里改成**自建两个职位**：
+    A 岗一面派给陈技术（他自己上传），B 岗一面派给刘架构（HR 上传），
+    两边都确认进 in_r1 —— 可见性差异只可能来自 created_by / 会话指派，与残留数据无关。
+    """
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         hr = await _login(client, "hr@prepilot.dev")
         iv = await _login(client, "interviewer@prepilot.dev")
-        pid = await _confirmed_position(client, hr)
+
+        p_mine = await _new_position(
+            client,
+            hr,
+            [{"type": "r1", "interviewer_id": IV_R1}, {"type": "hr", "interviewer_id": HR_LEAD}],
+        )
+        p_others = await _new_position(
+            client,
+            hr,
+            [{"type": "r1", "interviewer_id": IV_R2}, {"type": "hr", "interviewer_id": HR_LEAD}],
+        )
 
         mine = await client.post(
             "/api/candidates",
-            json={"position_id": pid, "name": "面试官上传", "contact_email": f"iv-own-{uuid.uuid4().hex[:8]}@example.com",
+            json={"position_id": p_mine, "name": "面试官上传", "contact_email": f"iv-own-{uuid.uuid4().hex[:8]}@example.com",
                   "raw_text": RESUME, "auth_tick": True},
             headers=iv,
         )
-        # 面试官只能选被指派的职位；该职位若未指派给他会被 403，跳过即可
-        if mine.status_code != 200:
-            pytest.skip("该演示职位未指派给 interviewer，跳过可见性断言")
+        assert mine.status_code == 200, mine.text
 
         others = await client.post(
             "/api/candidates",
-            json={"position_id": pid, "name": "HR上传", "contact_email": f"hr-own-{uuid.uuid4().hex[:8]}@example.com",
+            json={"position_id": p_others, "name": "HR上传", "contact_email": f"hr-own-{uuid.uuid4().hex[:8]}@example.com",
                   "raw_text": RESUME, "auth_tick": True},
             headers=hr,
         )
-        assert others.status_code == 200
+        assert others.status_code == 200, others.text
 
-        board = await client.get("/api/board", params={"position_id": pid}, headers=iv)
+        # 确认（确认即派单）→ 进 in_r1，才会出现在面试官看板的 r1 列
+        app_ids: list[int] = []
+        for cid in (mine.json()["id"], others.json()["id"]):
+            confirmed = await client.post(
+                f"/api/candidates/{cid}/confirm",
+                json={"profile": {"basic": {"name": "可见性"}, "skills": ["Go"], "confidence": {}}},
+                headers=hr,
+            )
+            assert confirmed.status_code == 200, confirmed.text
+            app_ids.append(confirmed.json()["applications"][0]["id"])
+
+        board = await client.get("/api/board", headers=iv)
         ids = {
             c["candidate_id"] for col in board.json()["columns"] for c in col["cards"]
         }
-        assert mine.json()["id"] in ids  # 自己上传的能看到（方案 a）
-        assert others.json()["id"] not in ids  # 他人的看不到
+        assert mine.json()["id"] in ids  # 自己上传 + 派给自己
+        assert others.json()["id"] not in ids  # 他人上传且派给别人，看不到
 
         denied = await client.get(f"/api/candidates/{others.json()['id']}", headers=iv)
         assert denied.status_code == 403
+
+        # 收尾：两条应聘记录终结处置掉，别留在 in_r1 污染别的用例的看板断言
+        for app_id in app_ids:
+            closed = await client.post(
+                f"/api/board/applications/{app_id}/transition",
+                json={"action": "reject"},
+                headers=hr,
+            )
+            assert closed.status_code == 200, closed.text
 
 
 def test_candidate_upload_parse_confirm():

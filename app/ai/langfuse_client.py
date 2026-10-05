@@ -14,6 +14,12 @@ API 变更（v2 -> v4）：
     @observe()
     def my_llm_step(...): ...
 未配置密钥时 observe 退化为透明空装饰器，业务代码无需改动。
+
+**为什么用 `Langfuse(...)` 构造而不是只靠环境变量**（2026-10-05）：
+`observe` 装饰器内部走 `get_client()`，它取的是「已注册的单例」。
+本项目从 .env 读配置而不是依赖进程环境变量，所以必须在这里显式构造一次，
+让单例带上正确的 host / 密钥；否则 `get_client()` 会拿空配置去连
+`https://cloud.langfuse.com`，表现为「埋点写了但 Langfuse 里一条都没有」。
 """
 from __future__ import annotations
 
@@ -34,13 +40,24 @@ def get_langfuse() -> Any | None:
         logger.info("Langfuse 未配置密钥，埋点已跳过")
         return None
 
-    from langfuse import Langfuse
+    try:
+        from langfuse import Langfuse
 
-    return Langfuse(
-        public_key=settings.LANGFUSE_PUBLIC_KEY,
-        secret_key=settings.LANGFUSE_SECRET_KEY,
-        host=settings.LANGFUSE_HOST,
-    )
+        return Langfuse(
+            public_key=settings.LANGFUSE_PUBLIC_KEY,
+            secret_key=settings.LANGFUSE_SECRET_KEY,
+            host=settings.LANGFUSE_HOST,
+            environment=settings.ENV,
+            release=settings.APP_VERSION,
+            # 云端一次 AI 调用 17~23s，队列攒太久会让 trace 迟迟不出现在界面上；
+            # 攒 5 条或 5 秒就发一次，兼顾网络开销与可见性
+            flush_at=5,
+            flush_interval=5.0,
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001 —— 埋点初始化失败不能拖垮应用启动
+        logger.warning("Langfuse 客户端初始化失败，埋点已停用：%s", exc)
+        return None
 
 
 def _noop_observe(*_args: Any, **_kwargs: Any):

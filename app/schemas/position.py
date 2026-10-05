@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 # ---------- 轮次 ----------
 
-ROUND_TYPES = ("r1", "r2", "hr", "offer")
+ROUND_TYPES = ("r1", "r2", "hr")
 MAX_ROUNDS = 4
 
 
@@ -17,7 +17,7 @@ class RoundIn(BaseModel):
     """一轮面试。seq 由数组顺序决定，前端 ▲/▼ 上下移 = 调整数组顺序后整体提交。"""
 
     name: str = Field(default="", max_length=100)
-    type: str = Field(pattern="^(r1|r2|hr|offer)$")
+    type: str = Field(pattern="^(r1|r2|hr)$")
     interviewer_id: int | None = None
 
 

@@ -47,23 +47,14 @@ def _run(coro):
 # ---------------------------------------------------------------- 纯函数
 
 
-def test_pick_first_round_skips_offer():
-    """首轮 = seq 最小且不是 offer 的轮次。offer 是终结节点，不能当首轮派出去。"""
+def test_pick_first_round_picks_smallest_seq():
+    """首轮 = seq 最小的轮次（v1.26 起没有非面试轮次，判断保留只为将来扩展）。"""
     rounds = [
-        PositionRound(position_id=1, seq=1, type="offer", interviewer_id=IV_R1),
-        PositionRound(position_id=1, seq=2, type="r1", interviewer_id=IV_R1),
         PositionRound(position_id=1, seq=3, type="hr", interviewer_id=3),
+        PositionRound(position_id=1, seq=2, type="r1", interviewer_id=IV_R1),
+        PositionRound(position_id=1, seq=4, type="r2", interviewer_id=IV_R1),
     ]
     assert dispatch_svc.pick_first_round(rounds).type == "r1"
-
-
-def test_pick_first_round_requires_interview_round():
-    """只有 offer 轮 → 无从派单。"""
-    with pytest.raises(AppError) as exc:
-        dispatch_svc.pick_first_round(
-            [PositionRound(position_id=1, seq=1, type="offer", interviewer_id=IV_R1)]
-        )
-    assert exc.value.detail["code"] == "session.no_round"
 
 
 def test_pick_first_round_rejects_empty():
@@ -208,6 +199,117 @@ async def _scenario_dispatch() -> None:
 def test_confirm_dispatches_first_round():
     """D5 确认即派单全链路。"""
     _run(_scenario_dispatch())
+
+
+async def _scenario_visibility_by_current_round() -> None:
+    """面试官只看到「轮到自己那一轮」的会话。
+
+    踩过的坑：只看 `interviewer_id` 会让二面面试官在 HR 还没推进时就看到候选人
+    （推进又退回会提前建出下一轮会话），一面还没结束他就点进去 —— 页面是空的，
+    流程顺序也被打乱了。所以列表再卡一道 `round_id == 应聘记录当前轮次`。
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        headers = await _login(client)
+        pid = await _new_position(client, headers, with_rounds=True)
+        cid = await _upload(client, headers, pid)
+
+        confirmed = await client.post(
+            f"/api/candidates/{cid}/confirm",
+            json={"profile": {"basic": {"name": "孙七"}, "skills": ["Java"], "confidence": {}}},
+            headers=headers,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        app_id = confirmed.json()["applications"][0]["id"]
+        r1_session = confirmed.json()["sessions"][0]["id"]
+
+        iv2 = await _login(client, "interviewer2@prepilot.dev")
+        before = await client.get("/api/sessions", headers=iv2)
+        assert r1_session not in [x["id"] for x in before.json()]
+
+        # HR 推进到二面：二面会话建出来，刘架构才看得到
+        adv = await client.post(
+            f"/api/board/applications/{app_id}/transition",
+            json={"action": "advance"},
+            headers=headers,
+        )
+        assert adv.status_code == 200, adv.text
+        after = await client.get("/api/sessions", headers=iv2)
+        assert r1_session not in [x["id"] for x in after.json()]  # 一面不是他的
+        mine = [x for x in after.json() if x["round_type"] == "r2"]
+        assert mine, "推进到二面后，二面面试官应该看到自己的会话"
+
+        # 退回一面：二面会话还在库里，但不该再出现在他的备面列表里
+        back = await client.post(
+            f"/api/board/applications/{app_id}/transition",
+            json={"action": "rollback"},
+            headers=headers,
+        )
+        assert back.status_code == 200, back.text
+        rolled = await client.get("/api/sessions", headers=iv2)
+        assert mine[0]["id"] not in [x["id"] for x in rolled.json()]
+
+        # 收尾：终结处置，别留在流程里污染别的用例
+        done = await client.post(
+            f"/api/board/applications/{app_id}/transition",
+            json={"action": "reject"},
+            headers=headers,
+        )
+        assert done.status_code == 200, done.text
+
+
+def test_interviewer_sees_only_current_round():
+    """「我的备面」按当前轮次过滤：没轮到的轮次不出现。"""
+    _run(_scenario_visibility_by_current_round())
+
+
+async def _scenario_history_round_read_only() -> None:
+    """列表里消失了，不代表点进去就 404。
+
+    面试官提交完一轮、HR 推进之后，他得能回看自己写过的那份面评（P17）——
+    所以「能不能看」放宽到「派给过自己」；但轮次已经过去，进去是只读。
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        headers = await _login(client)
+        pid = await _new_position(client, headers, with_rounds=True)
+        cid = await _upload(client, headers, pid)
+
+        confirmed = await client.post(
+            f"/api/candidates/{cid}/confirm",
+            json={"profile": {"basic": {"name": "孙七"}, "skills": ["Java"], "confidence": {}}},
+            headers=headers,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        app_id = confirmed.json()["applications"][0]["id"]
+        r1_session = confirmed.json()["sessions"][0]["id"]
+
+        adv = await client.post(
+            f"/api/board/applications/{app_id}/transition",
+            json={"action": "advance"},
+            headers=headers,
+        )
+        assert adv.status_code == 200, adv.text
+
+        # 一面面试官：列表里没了（轮到二面了），但点进去还能看自己那份
+        iv = await _login(client, "interviewer@prepilot.dev")
+        listed = await client.get("/api/sessions", headers=iv)
+        assert r1_session not in [x["id"] for x in listed.json()]
+
+        view = await client.get(f"/api/workbench/sessions/{r1_session}", headers=iv)
+        assert view.status_code == 200, view.text
+        assert view.json()["can_edit"] is False
+        assert view.json()["read_only_reason"] == "not_current_round"
+
+        done = await client.post(
+            f"/api/board/applications/{app_id}/transition",
+            json={"action": "reject"},
+            headers=headers,
+        )
+        assert done.status_code == 200, done.text
+
+
+def test_past_round_session_stays_readable():
+    """历史轮次的会话：列表不出现，直达可读不可写。"""
+    _run(_scenario_history_round_read_only())
 
 
 async def _scenario_confirm_without_rounds() -> None:

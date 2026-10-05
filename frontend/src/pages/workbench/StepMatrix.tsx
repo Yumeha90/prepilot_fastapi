@@ -1,5 +1,5 @@
 /**
- * P09 · Step 1 策略与矩阵（PRD 3.4.1 / §5.9）。
+ * P09 · Step 1 策略与矩阵（PRD 3.4.1 / §5.9）—— 独立成页后的版本。
  *
  * 三条口径：
  * - **「本轮重点」的唯一入口就在这个页面**（JD 编辑页没有那个勾选框），
@@ -7,26 +7,26 @@
  * - **只有被指派的面试官能改**：HR / HR 主管进来只读，页面把编辑控件换成纯文本，
  *   而不是「能点但一点就报 403」—— 后者是纯粹的体验事故。
  * - **矩阵整块保存**：改完一起提交，中途失败不会留下半截状态。
+ *   点「上一步 / 下一步 / 进度条 / 返回列表」时，未保存的编辑会自动存掉再跳转，
+ *   不需要手动点保存；只有存不下（比如能力项名空着）才拦一道确认。
+ * - **没有矩阵就把「下一步：问题链」置灰**（2026-10-04，与 Step2 同口径）：
+ *   问题链是矩阵的展开，没有输入就没有输出 —— 与其让人跳过去看到一句
+ *   「请先生成矩阵」，不如在这里就说明缺什么。
  */
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Button,
   Card,
   Checkbox,
-  Descriptions,
   Empty,
   Input,
   InputNumber,
   Select,
   Space,
-  Steps,
   Table,
   Tag,
-  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -40,33 +40,17 @@ import {
 } from '@ant-design/icons'
 
 import {
-  fetchWorkbench,
   generateMatrix,
   saveMatrix,
   updateDuration,
   type EvidenceStatus,
   type MatrixRow,
   type RowSource,
-  type ChainOut,
 } from '@/api/workbench'
 import { extractErrorCode, extractErrorMessage } from '@/api/client'
-import QuestionChain from '@/components/QuestionChain'
+import { useWorkbench } from './context'
 
 const { Text, Paragraph } = Typography
-
-// 首屏数据还没到时给问题链一个空壳，避免子组件里到处判 undefined
-const EMPTY_CHAIN: ChainOut = {
-  nodes: [],
-  generated: false,
-  revision: 0,
-  updated_at: null,
-  generated_at: '',
-  model: '',
-  status: 'idle',
-  error: '',
-  budget_minutes: 0,
-  rag_hits: {},
-}
 
 const STATUS_OPTIONS: EvidenceStatus[] = ['sufficient', 'verify', 'missing']
 const STATUS_COLOR: Record<EvidenceStatus, string> = {
@@ -80,39 +64,49 @@ const SOURCE_COLOR: Record<RowSource, string> = {
   manual: 'default',
 }
 
-export default function Workbench() {
+export default function StepMatrix() {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { sessionId } = useParams()
-  const id = Number(sessionId)
+  const { id, data, isLoading, canEdit, blocked, leaveGuard, setNextBlocked } = useWorkbench()
 
   const [rows, setRows] = useState<MatrixRow[]>([])
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  // 面试时长属于 Step1 的决策（它决定问题链的时间预算），跟着矩阵页一起改
   const [duration, setDuration] = useState<number>(45)
-  // 问题链是异步生成的（BR-12）：投递后开轮询，状态不再是 running 就停
-  const [polling, setPolling] = useState(false)
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['workbench', id],
-    queryFn: () => fetchWorkbench(id),
-    enabled: Number.isFinite(id) && id > 0,
-    refetchInterval: polling ? 3000 : false,
-  })
-
-  const chainStatus = data?.chain?.status
-  useEffect(() => {
-    if (chainStatus && chainStatus !== 'running') setPolling(false)
-  }, [chainStatus])
 
   // 服务端数据到达（含「重新生成」之后）时重置本地草稿
   useEffect(() => {
     if (data) {
       setRows(data.matrix.rows)
       setDirty(false)
+      dirtyRef.current = false
       setDuration(data.duration_minutes)
     }
   }, [data])
+
+  // 注册离开钩子：点「上一步 / 下一步 / 进度条 / 返回列表」时先把未保存的编辑存掉，
+  // 存不下（比如能力项名空着）才交回 Layout 弹确认。面试官不需要记得点保存。
+  const saveNowRef = useRef<() => Promise<void>>(async () => {})
+  useEffect(() => {
+    leaveGuard.current = async () => {
+      if (!canEdit || !dirtyRef.current) return true
+      try {
+        await saveNowRef.current()
+        return !dirtyRef.current
+      } catch {
+        // 存不下（校验不过 / 请求出错）才交回 Layout 弹「离开会丢失」
+        return false
+      }
+    }
+    return () => {
+      leaveGuard.current = null
+    }
+  }, [canEdit, leaveGuard])
+
+  // 兜底：经侧边菜单或浏览器后退离开时不会走 goTo，卸载前尽力再存一次
+  const flushRef = useRef<() => void>(() => {})
+  useEffect(() => () => flushRef.current(), [])
 
   const errMsg = (error: unknown) => {
     const code = extractErrorCode(error)
@@ -126,6 +120,7 @@ export default function Workbench() {
     onSuccess: (res) => {
       setRows(res.matrix.rows)
       setDirty(false)
+      dirtyRef.current = false
       void queryClient.invalidateQueries({ queryKey: ['workbench', id] })
       message.success(t('workbench.msg.generated'))
       if (res.stale) message.warning(t('workbench.msg.stale'))
@@ -138,6 +133,7 @@ export default function Workbench() {
     onSuccess: (res) => {
       setRows(res.matrix.rows)
       setDirty(false)
+      dirtyRef.current = false
       void queryClient.invalidateQueries({ queryKey: ['workbench', id] })
       message.success(t('workbench.msg.saved'))
       if (res.stale) message.warning(t('workbench.msg.stale'))
@@ -154,12 +150,37 @@ export default function Workbench() {
     onError: (e: unknown) => message.error(errMsg(e)),
   })
 
-  const canEdit = data?.can_edit ?? false
+  // 一行都没有就不许跳 Step2：跳过去也只能看到「请先生成矩阵」。
+  // 看的是本地草稿而不是服务端快照 —— 手动加了一行还没保存，也该放行
+  // （点下一步会自动先存，见 leaveGuard）。
+  useEffect(() => {
+    setNextBlocked(rows.length === 0, t('workbench.needMatrixNext'))
+    return () => setNextBlocked(false)
+  }, [rows.length, setNextBlocked, t])
+
   const matrix = data?.matrix
+
+  const markDirty = () => {
+    setDirty(true)
+    dirtyRef.current = true
+  }
+
+  // 离开时自动保存用的动作。用 ref 持有：mutation 对象每次渲染都是新的，
+  // 直接进 useEffect 依赖会让钩子反复重建
+  saveNowRef.current = async () => {
+    if (rows.some((r) => !r.capability.trim())) {
+      message.error(t('workbench.capabilityRequired'))
+      throw new Error('invalid')
+    }
+    await save.mutateAsync()
+  }
+  flushRef.current = () => {
+    if (canEdit && dirtyRef.current) void saveNowRef.current().catch(() => undefined)
+  }
 
   const patch = (index: number, next: Partial<MatrixRow>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...next } : r)))
-    setDirty(true)
+    markDirty()
   }
 
   const move = (index: number, delta: number) => {
@@ -171,7 +192,7 @@ export default function Workbench() {
       next[target] = prev[index]
       return next
     })
-    setDirty(true)
+    markDirty()
   }
 
   const addRow = () => {
@@ -188,7 +209,7 @@ export default function Workbench() {
         is_key: false,
       },
     ])
-    setDirty(true)
+    markDirty()
   }
 
   const handleSave = () => {
@@ -198,23 +219,6 @@ export default function Workbench() {
     }
     save.mutate()
   }
-
-  const stepItems = useMemo(
-    () =>
-      (data?.steps ?? []).map((s) => ({
-        title: t(`workbench.step.${s.key}`),
-        // 未实现的步骤统一 wait + 说明，避免看起来"能点"
-        description: s.state === 'disabled' ? t('workbench.nextStepDisabled') : undefined,
-        status:
-          s.state === 'done'
-            ? ('finish' as const)
-            : s.state === 'current'
-              ? ('process' as const)
-              : ('wait' as const),
-      })),
-    [data?.steps, t],
-  )
-  const currentStep = (data?.steps ?? []).findIndex((s) => s.state === 'current')
 
   const columns: ColumnsType<MatrixRow> = [
     {
@@ -300,10 +304,7 @@ export default function Workbench() {
       width: 90,
       render: (v: boolean, _row, index) =>
         canEdit ? (
-          <Checkbox
-            checked={v}
-            onChange={(e) => patch(index, { is_key: e.target.checked })}
-          />
+          <Checkbox checked={v} onChange={(e) => patch(index, { is_key: e.target.checked })} />
         ) : (
           <Tag color={v ? 'blue' : 'default'}>{v ? t('common.yes') : t('common.no')}</Tag>
         ),
@@ -338,7 +339,7 @@ export default function Workbench() {
             icon={<DeleteOutlined />}
             onClick={() => {
               setRows((prev) => prev.filter((_, i) => i !== index))
-              setDirty(true)
+              markDirty()
             }}
           />
         </Space>
@@ -346,150 +347,87 @@ export default function Workbench() {
     })
   }
 
-  const blocked = data?.blocked_reason ?? ''
-
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card
-        title={t('workbench.title')}
-        extra={
-          <Space>
-            <Button onClick={() => navigate('/workbench')}>{t('workbench.back')}</Button>
-            {canEdit && (
-              <>
-                <Button
-                  icon={<ThunderboltOutlined />}
-                  loading={generate.isPending}
-                  disabled={!!blocked}
-                  onClick={() => generate.mutate()}
-                >
-                  {matrix?.generated ? t('workbench.regenerate') : t('workbench.generate')}
-                </Button>
-                <Button type="primary" disabled={!dirty} loading={save.isPending} onClick={handleSave}>
-                  {t('workbench.save')}
-                </Button>
-              </>
-            )}
-          </Space>
-        }
-      >
-        <Descriptions size="small" column={4} style={{ marginBottom: 8 }}>
-          <Descriptions.Item label={t('workbench.info.candidate')}>
-            {data?.candidate_name || '—'}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('workbench.info.position')}>
-            {data?.position_name || '—'}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('workbench.info.round')}>
-            {data?.round_name || t(`workbench.round.${data?.round_type ?? 'r1'}`)}
-          </Descriptions.Item>
-          <Descriptions.Item label={t('workbench.info.duration')}>
-            {canEdit ? (
-              <Space size={4}>
-                <InputNumber
-                  min={10}
-                  max={240}
-                  value={duration}
-                  style={{ width: 90 }}
-                  onChange={(v) => setDuration(Number(v ?? 45))}
-                  onBlur={() => {
-                    if (duration !== data?.duration_minutes) saveDuration.mutate(duration)
-                  }}
-                />
-                <Text type="secondary">{t('workbench.minutes')}</Text>
-              </Space>
-            ) : (
-              `${data?.duration_minutes ?? 45} ${t('workbench.minutes')}`
-            )}
-          </Descriptions.Item>
-        </Descriptions>
-
-        <Steps size="small" items={stepItems} current={currentStep < 0 ? 0 : currentStep} />
-      </Card>
-
-      {data?.read_only_reason === 'submitted' && (
-        <Alert type="info" showIcon message={t('workbench.submittedNotice')} />
-      )}
-      {data?.read_only_reason === 'read_only' && (
-        <Alert type="info" showIcon message={t('workbench.readOnlyNotice')} />
-      )}
-      {blocked && (
-        <Alert type="warning" showIcon message={t(`workbench.blocked.${blocked}`)} />
-      )}
-
-      <Card
-        title={t('workbench.matrixTitle')}
-        extra={
-          matrix?.generated ? (
+    <Card
+      title={t('workbench.matrixTitle')}
+      extra={
+        <Space>
+          {matrix?.generated && (
             <Text type="secondary" style={{ fontSize: 12 }}>
               {t('workbench.revision')} {matrix.revision}
             </Text>
-          ) : null
-        }
-      >
-        <Paragraph type="secondary" style={{ fontSize: 12 }}>
-          {t('workbench.hint')}
-        </Paragraph>
-        {rows.length === 0 ? (
-          <Empty
-            description={canEdit ? t('workbench.empty') : t('workbench.emptyReadonly')}
+          )}
+          {canEdit && (
+            <>
+              <Button
+                icon={<ThunderboltOutlined />}
+                loading={generate.isPending}
+                disabled={!!blocked}
+                onClick={() => generate.mutate()}
+              >
+                {matrix?.generated ? t('workbench.regenerate') : t('workbench.generate')}
+              </Button>
+              <Button type="primary" disabled={!dirty} loading={save.isPending} onClick={handleSave}>
+                {t('workbench.save')}
+              </Button>
+            </>
+          )}
+        </Space>
+      }
+    >
+      <Paragraph type="secondary" style={{ fontSize: 12 }}>
+        {/* HR 面的行是 HR 考察维度，不是岗位技术能力项 —— 沿用技术面的提示
+            会让人以为「生成坏了，怎么没有岗位能力」 */}
+        {t(data?.round_type === 'hr' ? 'workbench.hintHr' : 'workbench.hint')}
+      </Paragraph>
+
+      <Space size={8} style={{ marginBottom: 12 }} wrap>
+        <Text>{t('workbench.info.duration')}</Text>
+        {canEdit ? (
+          <InputNumber
+            min={10}
+            max={240}
+            value={duration}
+            style={{ width: 90 }}
+            onChange={(v) => setDuration(Number(v ?? 45))}
+            onBlur={() => {
+              if (duration !== data?.duration_minutes) saveDuration.mutate(duration)
+            }}
           />
         ) : (
-          <Table
-            rowKey={(_r, i) => `${_r.id || i}-${i}`}
-            size="small"
-            loading={isLoading}
-            pagination={false}
-            dataSource={rows}
-            columns={columns}
-            scroll={{ x: 1100 }}
-          />
+          <Text strong>{data?.duration_minutes ?? 45}</Text>
         )}
-        {canEdit && (
-          <Button
-            type="dashed"
-            block
-            icon={<PlusOutlined />}
-            style={{ marginTop: 12 }}
-            onClick={addRow}
-          >
+        <Text type="secondary">{t('workbench.minutes')}</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {t('workbench.durationHint')}
+        </Text>
+      </Space>
+
+      {rows.length === 0 ? (
+        <Empty description={canEdit ? t('workbench.empty') : t('workbench.emptyReadonly')} />
+      ) : (
+        <Table
+          rowKey={(_r, i) => `${_r.id || i}-${i}`}
+          size="small"
+          loading={isLoading}
+          pagination={false}
+          dataSource={rows}
+          columns={columns}
+          scroll={{ x: 1100 }}
+        />
+      )}
+
+      {canEdit && (
+        <Button
+          type="dashed"
+          block
+          icon={<PlusOutlined />}
+          style={{ marginTop: 12 }}
+          onClick={addRow}
+        >
           {t('workbench.addRow')}
         </Button>
       )}
-      </Card>
-
-      <QuestionChain
-        sessionId={id}
-        chain={data?.chain ?? EMPTY_CHAIN}
-        canEdit={canEdit}
-        hasMatrix={(data?.matrix.rows.length ?? 0) > 0}
-        blocked={blocked}
-        onGenerated={() => {
-          setPolling(true)
-          void queryClient.invalidateQueries({ queryKey: ['workbench', id] })
-        }}
-      />
-
-      <Card>
-        <Space>
-          <Tooltip
-            title={
-              data?.chain?.status === 'ready'
-                ? t('workbench.nextStep2Disabled')
-                : t('workbench.nextStepDisabled')
-            }
-          >
-            <Button type="primary" disabled>
-              {data?.chain?.status === 'ready'
-                ? t('workbench.nextStep2')
-                : t('workbench.nextStep')}
-            </Button>
-          </Tooltip>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('workbench.nextStepHint')}
-          </Text>
-        </Space>
-      </Card>
-    </Space>
+    </Card>
   )
 }

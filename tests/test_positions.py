@@ -109,14 +109,14 @@ def _rounds(*types, interviewer: int | None = 1) -> list[RoundIn]:
 def test_br23_rounds():
     validate_rounds([])
     validate_rounds(_rounds("r1", "r2", "hr"))
-    validate_rounds(_rounds("r1", "r2", "offer"))  # 允许跳过 HR 面
+    validate_rounds(_rounds("r1", "hr"))  # 允许跳过二面
 
     with pytest.raises(Exception):
-        validate_rounds(_rounds("r1", "r2", "hr", "offer", "r1"))  # 超过 4 轮
+        validate_rounds(_rounds("r1", "r2", "hr", "r1", "r2"))  # 超过 4 轮
     with pytest.raises(Exception):
         validate_rounds(_rounds("r1", "r1", "hr"))  # 同类型重复
     with pytest.raises(Exception):
-        validate_rounds(_rounds("r1", "r2"))  # 末位不是 hr/offer
+        validate_rounds(_rounds("r1", "r2"))  # 末位不是 hr
     with pytest.raises(Exception):
         validate_rounds(_rounds("r2", "hr"))  # r2 前必须有 r1
     with pytest.raises(Exception):
@@ -409,7 +409,7 @@ async def _scenario_form_support():
         assert again.json()["jd_changed"] is False
         assert again.json()["rounds_changed"] is False
 
-        # 非法 JD（权重合计 90）与非法流程（末位不是 hr/offer）应被预检拦下
+        # 非法 JD（权重合计 90）与非法流程（末位不是 hr）应被预检拦下
         bad_jd = {**jd, "competencies": [{"text": "Go", "weight": 50}, {"text": "SQL", "weight": 30}, {"text": "MQ", "weight": 10}]}
         bad = await client.post(
             f"/api/positions/{pid}/save-preview",

@@ -17,17 +17,24 @@ import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import Forbidden from '@/pages/Forbidden'
 import NotFound from '@/pages/NotFound'
-import Placeholder from '@/pages/Placeholder'
 import PositionForm from '@/pages/PositionForm'
 import Positions from '@/pages/Positions'
 import Roles from '@/pages/Roles'
 import Board from '@/pages/Board'
 import CandidateUpload from '@/pages/CandidateUpload'
 import CandidateParse from '@/pages/CandidateParse'
+import EvaluationDetail from '@/pages/EvaluationDetail'
+import EvaluationList from '@/pages/EvaluationList'
 import MatchDetail from '@/pages/MatchDetail'
 import Lifecycle from '@/pages/Lifecycle'
 import WorkbenchList from '@/pages/WorkbenchList'
-import Workbench from '@/pages/Workbench'
+// 3.4 工作台：P09~P13 五个步骤拆成五个页面，共用 WorkbenchLayout 的进度条与会话数据
+import WorkbenchLayout from '@/pages/workbench/WorkbenchLayout'
+import StepMatrix from '@/pages/workbench/StepMatrix'
+import StepChain from '@/pages/workbench/StepChain'
+import StepFairness from '@/pages/workbench/StepFairness'
+import StepEvaluation from '@/pages/workbench/StepEvaluation'
+import StepSubmit from '@/pages/workbench/StepSubmit'
 
 const protectedRoutes: RouteObject[] = [
   { index: true, element: <Home /> },
@@ -40,11 +47,24 @@ const protectedRoutes: RouteObject[] = [
   { path: 'candidates/:id/parse', element: <CandidateParse /> },
   // P18 人岗匹配：按 application 定位（一人一职位下与候选人一一对应）
   { path: 'candidates/:aid/match', element: <MatchDetail /> },
-  // 3.4 AI 备面工作台：会话列表 + Step1 策略与矩阵（P09）
+  // 3.4 AI 备面工作台：会话列表 + 五个步骤页（P09 / P10 / P11 / P12，P13 待实现）
   { path: 'workbench', element: <WorkbenchList /> },
-  { path: 'workbench/:sessionId', element: <Workbench /> },
-  { path: 'evaluations', element: <Placeholder /> },
-  { path: 'matches', element: <Placeholder /> },
+  {
+    path: 'workbench/:sessionId',
+    element: <WorkbenchLayout />,
+    children: [
+      // 老链接 /workbench/{id} 直接落到 Step1，不用改列表页与看板的跳转
+      { index: true, element: <Navigate to="matrix" replace /> },
+      { path: 'matrix', element: <StepMatrix /> },
+      { path: 'chain', element: <StepChain /> },
+      { path: 'fairness', element: <StepFairness /> },
+      { path: 'evaluation', element: <StepEvaluation /> },
+      { path: 'submit', element: <StepSubmit /> },
+    ],
+  },
+  // P17 面评：列表 + 详情（只读；面试官只看本人面评，BR-17）
+  { path: 'evaluations', element: <EvaluationList /> },
+  { path: 'evaluations/:sessionId', element: <EvaluationDetail /> },
   { path: 'system/roles', element: <Roles /> },
   // P15 数据生命周期（BR-10 90 天粉碎 + 超管手动粉碎）
   { path: 'system/lifecycle', element: <Lifecycle /> },

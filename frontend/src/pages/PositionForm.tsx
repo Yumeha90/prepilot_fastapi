@@ -59,7 +59,7 @@ import { useAuthStore } from '@/store/auth'
 import Forbidden from '@/pages/Forbidden'
 
 const { Text, Title } = Typography
-const ROUND_TYPES: RoundType[] = ['r1', 'r2', 'hr', 'offer']
+const ROUND_TYPES: RoundType[] = ['r1', 'r2', 'hr']
 
 function evenWeights(count: number): number[] {
   // 按「5 的份数」分配再乘回 5：权重步进为 5，

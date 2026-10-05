@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "PrepPilot API"
     ENV: str = "dev"
     DEBUG: bool = True
+    # 打进监控指标与日志的标签，用来回答「面板上看到的曲线是哪个版本跑出来的」
+    APP_VERSION: str = "dev"
     # 本地开发默认 8010（避开 8000/8001/8080 等 infra 已占用端口）
     # 容器 / k3d / 云端由环境注入 APP_PORT=8000，与 k8s app.yaml、云端 compose 对齐
     APP_PORT: int = 8010
@@ -76,9 +78,10 @@ class Settings(BaseSettings):
     MILVUS_DB: str = "default"
 
     # ---------- Langfuse（v2 服务端，本地 docker compose，宿主 3030）----------
+    # 宿主 3005 = Langfuse Web（API 入口），3000 是容器内端口，别混
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
-    LANGFUSE_HOST: str = "http://localhost:3030"
+    LANGFUSE_HOST: str = "http://localhost:3005"
 
     # ---------- 腾讯云 COS（简历原件暂存）----------
     COS_REGION: str = ""

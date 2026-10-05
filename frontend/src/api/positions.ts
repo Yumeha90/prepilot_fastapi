@@ -3,8 +3,8 @@ import apiClient from './client'
 /** 职位状态：草稿 / 招聘中 / 已暂停 / 已关闭 */
 export type PositionStatus = 'draft' | 'open' | 'paused' | 'closed'
 
-/** 轮次类型：r1 技术一面 / r2 技术二面 / hr HR 面试 / offer Offer 审批（终结节点） */
-export type RoundType = 'r1' | 'r2' | 'hr' | 'offer'
+/** 轮次类型：r1 技术一面 / r2 技术二面 / hr HR 面试（v1.26 起无 offer 轮） */
+export type RoundType = 'r1' | 'r2' | 'hr'
 
 export interface Competency {
   id?: string

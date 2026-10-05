@@ -21,6 +21,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal, engine
 from app.main import app
 from app.models.position import Position
+from app.models.session import InterviewSession
 from app.services import workbench as wb
 
 RESUME = """郑十
@@ -54,7 +55,7 @@ def _run(coro):
     return asyncio.run(wrapper())
 
 
-async def _fake_llm(prompt: str) -> wb._MatrixLLM:
+async def _fake_llm(prompt: str, system: str = wb.MATRIX_SYSTEM_PROMPT) -> wb._MatrixLLM:
     """替掉真实 LLM 调用：测试锁的是编排与落库，不是模型输出质量。"""
     return _fake_rows()
 
@@ -197,14 +198,13 @@ async def _scenario_permissions() -> None:
         assert body["duration_minutes"] == 45
         assert body["blocked_reason"] == ""
         assert body["round_type"] == "r1"
-        # 已实现的两步里第 1 步 current、第 2 步 todo；未实现的标 disabled
-        # （不是 todo —— 点了会报错）
+        # 已实现的 5 步里第 1 步 current、其余 todo（未实现才标 disabled）
         assert [s["state"] for s in body["steps"]] == [
             "current",
             "todo",
-            "disabled",
-            "disabled",
-            "disabled",
+            "todo",
+            "todo",
+            "todo",
         ]
 
         # 2) HR 能看不能写
@@ -238,7 +238,12 @@ async def _scenario_permissions() -> None:
         assert too_short.json()["detail"]["code"] == "workbench.duration_invalid"
 
 
-    """HR / HR 主管只读，未指派的面试官连看都看不到。"""
+def test_workbench_permissions():
+    """HR / HR 主管只读，未指派的面试官连看都看不到。
+
+    注：这个用例一度因为 `def` 行被误删而从未执行过（只剩一个孤立 docstring），
+    里面的 steps 断言还停在「只实现两步」的旧口径，恢复时一并更正。
+    """
     _run(_scenario_permissions())
 
 
@@ -332,7 +337,7 @@ async def _scenario_save_validation() -> None:
         assert blank.status_code == 400
         assert blank.json()["detail"]["code"] == "workbench.matrix_invalid"
 
-        # 手加行标 manual，未知状态兜底 verify
+        # 手加行标 manual，未知状态兜底 verify（下限 2 项，BR-07 兜底）
         ok = await client.put(
             base + "/matrix",
             json={
@@ -342,7 +347,13 @@ async def _scenario_save_validation() -> None:
                         "source": "manual",
                         "status": "unknown-status",
                         "focus": "让候选人复述一次跨团队推动的经历",
-                    }
+                    },
+                    {
+                        "capability": "系统设计",
+                        "source": "manual",
+                        "status": "verify",
+                        "focus": "给出一个高并发场景让他拆解",
+                    },
                 ]
             },
             headers=iv,
@@ -444,3 +455,77 @@ def test_duration_bounds(monkeypatch, minutes: int, ok: bool):
                 assert exc.value.detail["code"] == "workbench.duration_invalid"
 
     _run(_inner())
+
+
+# ---------------------------------------------------------------- 进度条
+
+
+def _blank_session(**kw) -> InterviewSession:
+    """内存里的会话壳子：`_steps` 是纯函数，不需要真的落库。"""
+    base = dict(
+        id=1,
+        interviewer_id=IV_R1,
+        status="s1_draft",
+        matrix_json={},
+        chain_json={},
+        chain_status="idle",
+        fairness_json={},
+        evaluation_json={},
+    )
+    base.update(kw)
+    return InterviewSession(**base)
+
+
+def test_steps_only_follow_artifacts():
+    """进度条只认产物：会话状态跑到产物前面，也不许提前打勾。
+
+    踩过的坑：早期按 `session.status` 换算第几步、再用 `i < current` 打勾 ——
+    面评写完后状态推进到 s4/s5，Step3 就被判成 done。于是「问题链刚重新生成，
+    公平性却显示已通过」：面试官看到绿灯就往下走，合规检查等于白设。
+    """
+    s = _blank_session()
+    assert [x.state for x in wb._steps(s)] == ["current", "todo", "todo", "todo", "todo"]
+
+    s.matrix_json = {"rows": [{"capability": "Java"}]}
+    assert [x.state for x in wb._steps(s)] == ["done", "current", "todo", "todo", "todo"]
+
+    s.chain_status = "running"  # 生成中不算完成
+    assert [x.state for x in wb._steps(s)] == ["done", "current", "todo", "todo", "todo"]
+    s.chain_status = "ready"
+    s.chain_json = {"nodes": [{"id": "n1"}]}
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "current", "todo", "todo"]
+
+    s.fairness_json = {"result": "block", "scanned_at": "2026-10-04T00:00:00"}
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "current", "todo", "todo"]
+    s.fairness_json = {"result": "warn", "scanned_at": "2026-10-04T00:00:00"}
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "done", "current", "todo"]
+
+    # 关键：状态已经跑到 s5，产物却只到 Step3 —— 不许因为状态提前打勾
+    s.status = "s5_draft"
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "done", "current", "todo"]
+
+    s.evaluation_json = {"complete": True}
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "done", "done", "current"]
+
+    # 提交是终态：五步全打勾，不再区分产物
+    s.status = "submitted"
+    assert [x.state for x in wb._steps(s)] == ["done"] * 5
+
+
+def test_regenerating_chain_invalidates_fairness():
+    """改了题目，上一次的公平性结论就作废 —— 它是对旧文本给的。"""
+    s = _blank_session(
+        status="s4_draft",
+        matrix_json={"rows": [{"capability": "Java"}]},
+        chain_status="ready",
+        chain_json={"nodes": [{"id": "n1"}]},
+        fairness_json={"result": "pass", "scanned_at": "2026-10-04T00:00:00"},
+    )
+    assert [x.state for x in wb._steps(s)][2] == "done"
+
+    wb.invalidate_fairness(s)
+    assert s.fairness_json == {}
+    assert s.fairness_revision == 0
+    # 会话状态不回退：只是要重新扫一次，不需要从头备面
+    assert s.status == "s4_draft"
+    assert [x.state for x in wb._steps(s)] == ["done", "done", "current", "todo", "todo"]

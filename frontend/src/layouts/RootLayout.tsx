@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { ConfigProvider, Layout, Menu, Spin, Typography, type MenuProps } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -40,6 +40,38 @@ function filterMenu(items: MenuItem[], hasPerm: (code: string) => boolean): Menu
 
 type AntdMenuItems = NonNullable<MenuProps['items']>
 
+/** 扁平后的菜单项：path 用于匹配，parentKey 用于自动展开父级（如「系统管理」） */
+type FlatItem = { path: string; parentKey?: string }
+
+function flattenMenu(items: MenuItem[], parentKey?: string): FlatItem[] {
+  const out: FlatItem[] = []
+  for (const item of items) {
+    if (item.path) out.push({ path: item.path, parentKey })
+    if (item.children?.length) out.push(...flattenMenu(item.children, item.key))
+  }
+  return out
+}
+
+/**
+ * 按**最长前缀**匹配当前路由落在哪个菜单下。
+ *
+ * 只按全等匹配的话，详情页是永远匹配不上的：`/candidates/12/match`、
+ * `/evaluations/9`、`/positions/3/edit`、`/workbench/7/chain` 都不在菜单里，
+ * 于是高亮掉回第一项「工作台首页」—— 点一下「查看面评」，侧边栏跑到首页去，
+ * 看起来像被踢出了当前模块。这些详情页本来就该挂在各自的模块下。
+ */
+function matchMenu(pathname: string, flat: FlatItem[]): FlatItem | null {
+  let best: FlatItem | null = null
+  for (const item of flat) {
+    const hit =
+      item.path === '/'
+        ? pathname === '/'
+        : pathname === item.path || pathname.startsWith(`${item.path}/`)
+    if (hit && (!best || item.path.length > best.path.length)) best = item
+  }
+  return best
+}
+
 function toAntdItems(items: MenuItem[], t: (k: string) => string): AntdMenuItems {
   return items.map((item) => {
     const base = { key: item.path ?? item.key, icon: item.icon, label: t(item.i18nKey) }
@@ -61,12 +93,19 @@ export default function RootLayout() {
     void i18n.changeLanguage(language)
   }
 
-  const menuItems = useMemo(() => toAntdItems(filterMenu(MENU_ITEMS, hasPerm), t), [hasPerm, t])
-  const selectedKeys = useMemo(() => {
-    const path = location.pathname
-    const exists = menuItems.some((i) => i && 'key' in i && i.key === path)
-    return [exists ? path : String(menuItems[0] && 'key' in menuItems[0] ? menuItems[0].key : '/')]
-  }, [location.pathname, menuItems])
+  const visible = useMemo(() => filterMenu(MENU_ITEMS, hasPerm), [hasPerm])
+  const menuItems = useMemo(() => toAntdItems(visible, t), [visible, t])
+  const flat = useMemo(() => flattenMenu(visible), [visible])
+
+  const hit = matchMenu(location.pathname, flat)
+  const selectedKeys = useMemo(() => (hit ? [hit.path] : []), [hit])
+  // 命中子项时展开它所属的父级（如直接访问 /system/roles），否则子菜单是收起的
+  const [openKeys, setOpenKeys] = useState<string[]>(hit?.parentKey ? [hit.parentKey] : [])
+  useEffect(() => {
+    const key = hit?.parentKey
+    if (!key) return
+    setOpenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
+  }, [hit?.parentKey])
 
   const locale = antdLocales[language] ?? zhCN
 
@@ -98,6 +137,8 @@ export default function RootLayout() {
                 style={{ height: '100%', borderInlineEnd: 0, paddingTop: 8 }}
                 items={menuItems}
                 selectedKeys={selectedKeys}
+                openKeys={openKeys}
+                onOpenChange={(keys) => setOpenKeys(keys as string[])}
                 onClick={({ key }) => navigate(key)}
               />
             ) : (

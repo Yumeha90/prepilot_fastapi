@@ -4,7 +4,7 @@
 重点锁死三件事：
 - **BR-15 列可见性**：面试官只能拿到 r1 / r2，且列由后端下发
 - **推进按流程配置自动找下一轮并派单**，不是人选
-- **offer 轮不建会话**（终结处置节点，不产生面评）
+- **末轮（HR 面）之后没有下一轮**，推进要被挡并提示去做终结处置
 """
 from __future__ import annotations
 
@@ -143,7 +143,7 @@ async def _scenario_columns() -> None:
         )
         _, app_id = await _confirm_candidate(client, headers, pid)
 
-        # HR：8 列，8 个动作
+        # HR：9 列（v1.24 accepted 成列），7 个动作（含撤销处置）
         hr = await client.get("/api/board", headers=headers)
         assert hr.status_code == 200, hr.text
         stages = [c["stage"] for c in hr.json()["columns"]]
@@ -152,7 +152,7 @@ async def _scenario_columns() -> None:
             "in_r1",
             "in_r2",
             "in_hr",
-            "in_offer",
+            "accepted",
             "rejected",
             "in_pool",
             "archived",
@@ -164,21 +164,28 @@ async def _scenario_columns() -> None:
             "reject",
             "pool",
             "archive",
+            "reopen",
         ]
 
-        # 面试官：只有 r1 / r2，且没有处置动作
+        # 面试官：只有 r1 / r2，没有处置动作，也不下发 summary 计数（BR-15）
         iv = await _login(client, "interviewer@prepilot.dev")
         board = await client.get("/api/board", headers=iv)
         assert board.status_code == 200
         assert [c["stage"] for c in board.json()["columns"]] == ["in_r1", "in_r2"]
         assert board.json()["actions"] == []
+        assert board.json()["summary"] == {}
         assert any(c["application_id"] == app_id for c in board.json()["columns"][0]["cards"])
 
-        # r2 面试官此刻还没派给他：r2 列应为空（BR-14）
+        # r2 面试官此刻还没派给他：这条应聘记录不应出现在他的任何一列（BR-14）
+        # ⚠️ 断言必须**只看本次场景建的那条**：整列为空的写法取决于库里有没有其它
+        # 历史数据（别的用例、人工演示数据都会让它随机失败），而"这条他看不到"
+        # 才是 BR-14 真正的口径。
         iv2 = await _login(client, "interviewer2@prepilot.dev")
         board2 = await client.get("/api/board", headers=iv2)
-        assert board2.json()["columns"][0]["cards"] == []  # r1 列
-        assert board2.json()["columns"][1]["cards"] == []  # r2 列
+        iv2_ids = [
+            c["application_id"] for col in board2.json()["columns"] for c in col["cards"]
+        ]
+        assert app_id not in iv2_ids
 
 
 def test_board_columns_differ_by_role():
@@ -240,8 +247,8 @@ def test_advance_follows_round_config_and_rollback_reuses_session():
     _run(_scenario_advance())
 
 
-async def _scenario_offer_round() -> None:
-    """offer 是终结处置节点：推进到 offer 不建会话（PRD 3.2）。"""
+async def _scenario_last_round_cannot_advance() -> None:
+    """流程末轮（HR 面）之后没有下一轮：推进要报错并指路去做终结处置。"""
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -251,23 +258,29 @@ async def _scenario_offer_round() -> None:
             headers,
             [
                 {"type": "r1", "interviewer_id": IV_R1},
-                {"type": "offer", "interviewer_id": HR_LEAD},
+                {"type": "hr", "interviewer_id": HR_LEAD},
             ],
         )
         _, app_id = await _confirm_candidate(client, headers, pid, name="郑十")
 
-        to_offer = await _transition(client, headers, app_id, "advance")
-        assert to_offer.status_code == 200, to_offer.text
-        assert to_offer.json()["stage"] == "in_offer"
+        to_hr = await _transition(client, headers, app_id, "advance")
+        assert to_hr.status_code == 200, to_hr.text
+        assert to_hr.json()["stage"] == "in_hr"
 
+        # HR 面是末轮：再推进要被挡，提示去做终结处置
+        over = await _transition(client, headers, app_id, "advance")
+        assert over.status_code == 400
+        assert over.json()["detail"]["code"] == "candidate.stage_invalid"
+
+        # HR 面产会话，且不额外生成别的轮次会话
         sessions = (
             await client.get("/api/sessions", params={"position_id": pid}, headers=headers)
         ).json()
-        assert [s["round_type"] for s in sessions] == ["r1"]
+        assert sorted(s["round_type"] for s in sessions) == ["hr", "r1"]
 
 
-def test_offer_round_creates_no_session():
-    _run(_scenario_offer_round())
+def test_last_round_cannot_advance_and_hr_creates_session():
+    _run(_scenario_last_round_cannot_advance())
 
 
 # ---------------------------------------------------------------- 终结处置
@@ -302,18 +315,68 @@ async def _scenario_settle() -> None:
         assert again.status_code == 400
         assert again.json()["detail"]["code"] == "candidate.stage_invalid"
 
-        # 录用后离开看板列，只进 summary 计数
+        # 录用后占「已录用」列，不再只进 summary 计数（v1.24：录用的人必须还找得到）
         _, app_id2 = await _confirm_candidate(client, headers, pid, name="赵二")
         accepted = await _transition(client, headers, app_id2, "accept")
         assert accepted.json()["stage"] == "accepted"
         board = await client.get("/api/board", params={"position_id": pid}, headers=headers)
-        assert board.json()["summary"].get("accepted") == 1
-        stages = [c["stage"] for c in board.json()["columns"]]
-        assert "accepted" not in stages
+        cols = {c["stage"]: c["cards"] for c in board.json()["columns"]}
+        assert [c["application_id"] for c in cols["accepted"]] == [app_id2]
+        assert board.json()["summary"].get("accepted") is None
+
+        # 撤销处置：回到终结前所在的轮次，且能继续推进
+        reopened = await _transition(client, headers, app_id2, "reopen")
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["stage"] == "in_r1"
+
+        # 还在流程里的撤销要被挡掉
+        in_flow = await _transition(client, headers, app_id2, "reopen")
+        assert in_flow.status_code == 400
+        assert in_flow.json()["detail"]["code"] == "candidate.stage_invalid"
 
 
 def test_settle_moves_card_and_accepted_only_counts():
     _run(_scenario_settle())
+
+
+async def _scenario_all_terminal_settle() -> None:
+    """四个终结处置都要落进自己那列，且都能撤销回原轮次。"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = await _login(client)
+        pid = await _new_position(
+            client,
+            headers,
+            [
+                {"type": "r1", "interviewer_id": IV_R1},
+                {"type": "hr", "interviewer_id": HR_LEAD},
+            ],
+        )
+        for action, stage in (
+            ("accept", "accepted"),
+            ("reject", "rejected"),
+            ("pool", "in_pool"),
+            ("archive", "archived"),
+        ):
+            _, app_id = await _confirm_candidate(client, headers, pid, name=f"终-{action}")
+            resp = await _transition(client, headers, app_id, action)
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["stage"] == stage
+
+            board = await client.get(
+                "/api/board", params={"position_id": pid}, headers=headers
+            )
+            cols = {c["stage"]: c["cards"] for c in board.json()["columns"]}
+            assert [c["application_id"] for c in cols[stage]] == [app_id], stage
+
+            back = await _transition(client, headers, app_id, "reopen")
+            assert back.status_code == 200, back.text
+            assert back.json()["stage"] == "in_r1", stage
+
+
+def test_all_terminal_dispositions_are_visible_and_reopenable():
+    _run(_scenario_all_terminal_settle())
 
 
 async def _scenario_interviewer_cannot_dispose() -> None:
@@ -359,3 +422,74 @@ async def _scenario_no_rounds() -> None:
 
 def test_advance_without_rounds_rejected():
     _run(_scenario_no_rounds())
+
+
+# ---------------------------------------------------------------- 当前轮次的会话
+
+
+async def _scenario_current_round_session() -> None:
+    """卡片显示的是「当前轮次」的会话，不是 id 最大的那条。
+
+    退回之后当前轮次回到 r1，但 id 最大的仍是 r2 的会话。若按 id 取最大，
+    「一面面评已提交」的候选人会显示成二面的「待备面」—— HR 据此判断等于看错一轮。
+    """
+    from app.core.database import SessionLocal
+    from app.models.session import InterviewSession
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = await _login(client)
+        pid = await _new_position(
+            client,
+            headers,
+            [
+                {"type": "r1", "interviewer_id": IV_R1},
+                {"type": "r2", "interviewer_id": IV_R2},
+                # BR-23：末位必须是 hr
+                {"type": "hr", "interviewer_id": HR_LEAD},
+            ],
+        )
+        _, app_id = await _confirm_candidate(client, headers, pid, name="看板轮次")
+
+        def card_of(body) -> tuple[str, dict]:
+            for col in body["columns"]:
+                for c in col["cards"]:
+                    if c["application_id"] == app_id:
+                        return col["stage"], c
+            raise AssertionError("看板里找不到该应聘记录")
+
+        board = await client.get("/api/board", headers=headers)
+        stage, card = card_of(board.json())
+        assert stage == "in_r1"
+        r1_id = card["session_id"]
+
+        adv = await _transition(client, headers, app_id, "advance")
+        assert adv.status_code == 200, adv.text
+        stage, card = card_of((await client.get("/api/board", headers=headers)).json())
+        assert stage == "in_r2"
+        r2_id = card["session_id"]
+        assert r2_id > r1_id  # 推进确实新建了 id 更大的会话
+
+        back = await _transition(client, headers, app_id, "rollback")
+        assert back.status_code == 200, back.text
+
+        # 把 r1 的会话置成已提交：这才是候选人当前轮次的真实状态
+        async with SessionLocal() as db:
+            s1 = await db.get(InterviewSession, r1_id)
+            s1.status = "submitted"
+            await db.commit()
+
+        stage, card = card_of((await client.get("/api/board", headers=headers)).json())
+        assert stage == "in_r1"
+        assert card["session_id"] == r1_id
+        assert card["session_status"] == "submitted"
+
+        # 收尾：本用例给 r2 面试官也建了会话，留在流程里会污染其它用例
+        # （如「面试官 r1 列应为空」这类按全量数据断言的用例）
+        done = await _transition(client, headers, app_id, "reject")
+        assert done.status_code == 200, done.text
+
+
+def test_board_card_uses_current_round_session():
+    _run(_scenario_current_round_session())

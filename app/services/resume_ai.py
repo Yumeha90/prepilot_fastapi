@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.ai.llm import structured_call
 from app.core.errors import ErrorCode, bad_request
+from app.observability import metrics, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,7 @@ def _merge(parts: list[dict]) -> dict:
 # ---------------------------------------------------------------- 入口
 
 
+@tracing.ai_step("resume.parse")
 async def parse_resume(raw_text: str) -> dict:
     """把简历原文解析成结构化档案 + 区块置信度。
 
@@ -227,6 +229,7 @@ async def parse_resume(raw_text: str) -> dict:
     """
     text = re.sub(r"[ \t\u3000]+", " ", (raw_text or "")).strip()
     if len(text) < MIN_RESUME_CHARS:
+        metrics.record_op("resume.parse", "rejected")
         raise bad_request(
             ErrorCode.RESUME_TEXT_TOO_SHORT,
             f"简历内容太短（{len(text)} 字），请上传完整的简历或手动粘贴",
@@ -240,16 +243,21 @@ async def parse_resume(raw_text: str) -> dict:
 
     if len(text) <= L0_MAX_CHARS:
         data = await _call(text)
+        tracing.add_metadata(chars=len(text), chunks=1, mode="L0")
         return {"profile": _from_model(data), "chunks": 1, "notice": ""}
 
     chunks = _split_chunks(text)
     if len(chunks) > MAX_CHUNKS:
+        metrics.record_op("resume.parse", "rejected")
         raise bad_request(
             ErrorCode.RESUME_TOO_LONG,
             f"简历过长（需分 {len(chunks)} 段，上限 {MAX_CHUNKS} 段），"
             "请精简后重新上传，或手动粘贴关键段落",
         )
     logger.info("简历 %d 字，走 L1 分块解析（%d 段）", len(text), len(chunks))
+    # 降级到分块解析必须能被看到：它意味着单次调用装不下，成本与耗时都会翻倍
+    metrics.record_degraded("resume.parse", "chunked_l1")
+    tracing.mark_degraded("简历过长，降级为分块解析", chunks=len(chunks))
     # 并发而非串行（2026-10-01）：云端单次调用实测 17~23s，3 段串行就是 50~70s，
     # 会撞 nginx proxy_read_timeout。各段互不依赖，gather 把墙钟压到单段的量级。
     results = await asyncio.gather(*(_call(c) for c in chunks))

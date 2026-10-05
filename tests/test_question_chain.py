@@ -147,7 +147,7 @@ def _fake_node(capability: str, *, bad_number: bool = False) -> qc._NodeLLM:
 
 
 def _fake_chain(nodes: list[qc._NodeLLM]):
-    async def _fake_llm(prompt: str) -> qc._ChainLLM:
+    async def _fake_llm(prompt: str, system: str = qc.CHAIN_SYSTEM_PROMPT) -> qc._ChainLLM:
         return qc._ChainLLM(nodes=nodes)
 
     return _fake_llm
@@ -162,7 +162,9 @@ async def _scenario_setup() -> int:
         # 先落一份矩阵（生成问题链的前置）
         from app.services import workbench as wb
 
-        async def _fake_matrix(prompt: str) -> wb._MatrixLLM:
+        async def _fake_matrix(
+            prompt: str, system: str = wb.MATRIX_SYSTEM_PROMPT
+        ) -> wb._MatrixLLM:
             return wb._MatrixLLM(
                 rows=[
                     wb._RowLLM(capability="Java", source="jd", evidence="高级工程师", status="sufficient", focus="GC 调优"),
@@ -219,6 +221,73 @@ def test_balance_minutes_fits_budget(duration: int, expected_budget: int):
     assert all(qc.MIN_NODE_MINUTES <= n["minutes"] <= qc.MAX_NODE_MINUTES for n in nodes)
 
 
+def test_observation_text_never_shows_json():
+    """观察点是给用户看的：页面上绝不能出现 `{"type": "bad", "desc": "..."}`。
+
+    模型偶发把一条观察点写成 JSON（字符串里套 JSON，或直接给对象），
+    原样落库就等于把模型的内部分类漏给面试官 —— 这里只留正文 + 「好 / 差」。
+    """
+    from app.services import workbench as wb
+
+    bad = "仅罗列 JVM 参数名称，无法提供排查过程，判定为了解而非掌握"
+    assert wb.observation_text(f'{{"type": "bad", "desc": "{bad}"}}') == f"差：{bad}"
+    assert wb.observation_text({"type": "bad", "desc": bad}) == f"差：{bad}"
+    assert wb.observation_text({"type": "good", "desc": "能给出量化结果"}) == "好：能给出量化结果"
+    # 没有 type 就只留正文；正文键不叫 desc 也要认
+    assert wb.observation_text({"desc": "能讲清取舍"}) == "能讲清取舍"
+    assert wb.observation_text('{"type": "bad", "text": "答得空泛"}') == "差：答得空泛"
+    # 普通句子原样保留，不能被洗坏
+    assert wb.observation_text("能说出 P99 从 300ms 降到 80ms") == "能说出 P99 从 300ms 降到 80ms"
+    # 数组逐条拆开，不留中括号
+    assert wb.observation_text('["答出排查过程", "给出量化结果"]') == "答出排查过程；给出量化结果"
+
+    for raw in (
+        f'{{"type": "bad", "desc": "{bad}"}}',
+        {"type": "bad", "desc": bad},
+        '{"type": "bad", "text": "答得空泛"}',
+    ):
+        text = wb.observation_text(raw)
+        assert "{" not in text and "}" not in text and '"' not in text and "desc" not in text
+
+
+def test_generated_observations_are_plain_text(monkeypatch):
+    """落到库里的观察点必须是正文 —— 存成 JSON 就晚了（只能重新生成才洗得掉）。"""
+    sid = _run(_scenario_setup())
+    node = qc._NodeLLM(
+        capability="Java",
+        main_question="讲一次 GC 排查的经历",
+        followups=[qc._FollowupLLM(level=1, vague="当时怎么定位的", anti_fake="是你自己得出的吗")],
+        observations=[
+            '{"type": "bad", "desc": "仅罗列 JVM 参数名称，无法提供排查过程"}',
+            {"type": "good", "desc": "能说出 P99 从 300ms 降到 80ms"},
+            "能讲清取舍",
+        ],
+        minutes=9,
+        rag_refs=[],
+    )
+    monkeypatch.setattr(
+        qc, "_call_llm", _fake_chain([node, _fake_node("数据库"), _fake_node("微服务")])
+    )
+    monkeypatch.setattr(qc, "retrieve", lambda c, f, top_k=3: _fake_hits(c))
+
+    async def _inner() -> None:
+        async with SessionLocal() as db:
+            session = await db.get(InterviewSession, sid)
+            user = await db.get(User, IV_R1)
+            chain = await qc.generate_chain(db, user, session)
+            obs = chain.nodes[0].observations
+            assert obs and all("{" not in o for o in obs), obs
+            assert obs[0].startswith("差：")
+            assert obs[1].startswith("好：")
+            assert obs[2] == "能讲清取舍"
+        # 库里已有的老数据（JSON 串）在读取时也要当场还原
+        async with SessionLocal() as db2:
+            again = qc.chain_out(await db2.get(InterviewSession, sid)).nodes[0].observations
+            assert all("{" not in o for o in again), again
+
+    _run(_inner())
+
+
 def test_unsupported_numbers_only_checks_multi_digit():
     """只看两位及以上的数字：「3 年」这种单位性数字查了全是误报。"""
     allowed = "工作 5 年，2022 年入职，QPS 3000"
@@ -258,6 +327,78 @@ def test_generate_chain_persists_and_advances_status(monkeypatch):
             assert session.status == "s3_draft"
             assert session.chain_status == "ready"
             assert session.chain_revision == 1
+
+    _run(_inner())
+
+
+def test_regenerate_chain_wipes_stale_fairness(monkeypatch):
+    """重新生成问题链 → 上一次的公平性结论作废。
+
+    结论是针对**旧文本**给的。题目换了一批还挂着「通过」，Step3 一进来就打勾，
+    面试官以为检查过了 —— 其实是上一版问题的结果（2026-10-04 实测踩到）。
+    """
+    sid = _run(_scenario_setup())
+    nodes = [_fake_node("Java"), _fake_node("数据库"), _fake_node("微服务")]
+    monkeypatch.setattr(qc, "_call_llm", _fake_chain(nodes))
+    monkeypatch.setattr(qc, "retrieve", lambda capability, focus, top_k=3: _fake_hits(capability))
+
+    async def _inner() -> None:
+        async with SessionLocal() as db:
+            session = await db.get(InterviewSession, sid)
+            user = await db.get(User, IV_R1)
+            await qc.generate_chain(db, user, session)
+
+            # 假装这一版已经检查通过
+            session.fairness_json = {"result": "pass", "scanned_at": "2026-10-04T00:00:00"}
+            session.fairness_revision = 2
+            await db.commit()
+
+            await qc.generate_chain(db, user, session)
+            await db.refresh(session)
+            assert session.fairness_json in ({}, None)
+            assert session.fairness_revision == 0
+            # 会话状态不回退：回到 Step3 重新扫一次即可
+            assert session.status == "s3_draft"
+
+    _run(_inner())
+
+
+def test_chain_task_must_not_preset_fairness(monkeypatch):
+    """异步生成任务**不得**替面试官写公平性结论（2026-10-04 修）。
+
+    `_persist_chain` 刚把上一版的结论作废掉，任务里再"顺手扫一次"等于把绿灯又点回来：
+    进度条 Step3 打勾，而面试官从未在 Step3 点过扫描 —— 他以为检查过了，其实是系统
+    替他对着新题目盖了个章。合规检查的意义就是**有人为这一版题目负责**，
+    所以结论只能来自 Step3 的那一次点击（BR-25 / BR-26）。
+    """
+    from app.services import fairness as fairness_svc
+    from app.tasks import tasks as tasks_mod
+
+    sid = _run(_scenario_setup())
+    nodes = [_fake_node("Java"), _fake_node("数据库"), _fake_node("微服务")]
+    monkeypatch.setattr(qc, "_call_llm", _fake_chain(nodes))
+    monkeypatch.setattr(qc, "retrieve", lambda capability, focus, top_k=3: _fake_hits(capability))
+
+    # 记录而不是抛错：老实现把扫描包在 try/except 里，抛错会被当"预扫描失败"吞掉，
+    # 测试就成了假绿灯。这里只记账，再断言一次都没被调过。
+    called: list[int] = []
+
+    async def _record(*_args, **_kwargs):
+        called.append(1)
+        return None
+
+    monkeypatch.setattr(fairness_svc, "scan", _record)
+
+    out = tasks_mod.generate_question_chain(sid, IV_R1)
+    assert out.get("ok") is True, out
+    assert called == [], "生成问题链后不该自动扫描公平性（结论必须由人在 Step3 点一次）"
+
+    async def _inner() -> None:
+        async with SessionLocal() as db:
+            session = await db.get(InterviewSession, sid)
+            assert session.chain_status == "ready", session.chain_status
+            assert session.fairness_json in ({}, None)
+            assert session.fairness_revision in (0, None)
 
     _run(_inner())
 
@@ -342,9 +483,15 @@ async def _scenario_permissions() -> None:
         # 3) 有矩阵后投递成功：状态变 running，回执带 task_id
         import app.services.workbench as wb_mod
 
-        async def _fake_matrix(prompt: str) -> wb_mod._MatrixLLM:
+        async def _fake_matrix(
+            prompt: str, system: str = wb_mod.MATRIX_SYSTEM_PROMPT
+        ) -> wb_mod._MatrixLLM:
             return wb_mod._MatrixLLM(
-                rows=[wb_mod._RowLLM(capability="Java", source="jd", status="verify", focus="GC")]
+                # 下限 2 项（MIN_MATRIX_ROWS）
+                rows=[
+                    wb_mod._RowLLM(capability="Java", source="jd", status="verify", focus="GC"),
+                    wb_mod._RowLLM(capability="数据库", source="jd", status="verify", focus="慢查询"),
+                ]
             )
 
         wb_mod._call_llm = _fake_matrix

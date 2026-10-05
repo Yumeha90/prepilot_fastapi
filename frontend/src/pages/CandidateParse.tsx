@@ -31,6 +31,8 @@ import { DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/i
 import { confirmCandidate, fetchCandidate, reparseCandidate } from '@/api/candidates'
 import { emptyProfile, type ResumeProfile } from '@/api/resume'
 import { extractErrorCode } from '@/api/client'
+import Forbidden from '@/pages/Forbidden'
+import { useAuthStore } from '@/store/auth'
 
 const { Text, Title } = Typography
 
@@ -39,7 +41,7 @@ const LOW_CONFIDENCE = 0.6
 
 type ProfileKey = 'basic' | 'work' | 'projects' | 'skills' | 'education'
 
-export default function CandidateParse() {
+function CandidateParse() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
@@ -49,6 +51,8 @@ export default function CandidateParse() {
   const [parsing, setParsing] = useState(false)
   const [notice, setNotice] = useState('')
   const [parseFailed, setParseFailed] = useState(false)
+  /** 是否已经解析过（决定右上角按钮是「AI 解析」还是「重新解析」） */
+  const [parsed, setParsed] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['candidate', candidateId],
@@ -60,14 +64,20 @@ export default function CandidateParse() {
     return t(`errors.${code}`, { defaultValue: t('common.error') })
   }
 
-  // 未解析过的候选人进入页面即自动解析一次；已确认的直接用库里存的结果
+  /**
+   * BR-27：解析必须由 HR 手动点按钮触发，进入页面不自动解析。
+   * 已解析过（草稿或已确认）的直接载入库里存的结果，不再消耗一次 LLM 调用。
+   */
   useEffect(() => {
     if (!data) return
     if (data.parsed_profile) {
       setProfile({ ...emptyProfile(), ...data.parsed_profile })
-      return
+      setParsed(true)
+    } else {
+      setProfile(emptyProfile())
+      setParsed(false)
     }
-    if (data.profile_status !== 'confirmed') void runParse()
+    setParseFailed(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.id])
 
@@ -78,6 +88,7 @@ export default function CandidateParse() {
       const out = await reparseCandidate(candidateId)
       setProfile({ ...emptyProfile(), ...out.profile })
       setNotice(out.notice)
+      setParsed(true)
       message.success(t('candidate.msg.parsed'))
     } catch (e) {
       setParseFailed(true)
@@ -159,11 +170,12 @@ export default function CandidateParse() {
         <Space>
           {!confirmed && (
             <Button
+              type={parsed ? 'default' : 'primary'}
               icon={<ThunderboltOutlined />}
               loading={parsing}
               onClick={runParse}
             >
-              {t('candidate.reparse')}
+              {parsed ? t('candidate.reparse') : t('candidate.parse')}
             </Button>
           )}
           <Button onClick={() => navigate('/candidates')}>{t('position.backToList')}</Button>
@@ -181,6 +193,14 @@ export default function CandidateParse() {
         ]}
       />
 
+      {!confirmed && !parsed && !parsing && (
+        <Alert
+          type="info"
+          showIcon
+          message={t('candidate.parseIdleHint')}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       {notice && <Alert type="info" showIcon message={notice} style={{ marginBottom: 12 }} />}
       {!confirmed && data?.parsed_profile && (
         <Alert
@@ -459,4 +479,15 @@ export default function CandidateParse() {
       )}
     </Card>
   )
+}
+
+/**
+ * 权限守卫单独包一层：该页不在侧边栏菜单里，RoutePermGuard 拦不到。
+ * 面试官没有 `candidate:upload_resume`（BR-15 方案①，2026-10-04 收回），
+ * 建档与解析确认统一由 HR 承担。
+ */
+export default function CandidateParseGuard() {
+  const hasPerm = useAuthStore((s) => s.hasPerm)
+  if (!hasPerm('candidate:upload_resume')) return <Forbidden />
+  return <CandidateParse />
 }

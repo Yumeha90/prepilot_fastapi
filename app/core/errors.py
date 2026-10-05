@@ -69,7 +69,7 @@ class ErrorCode:
     # 派单与会话（PRD 3.3 第二段 / 3.4）
     SESSION_NOT_FOUND = "session.not_found"
     SESSION_FORBIDDEN = "session.forbidden"
-    # 职位还没配面试轮次（只有 offer 轮也算没配）：派单无从下手
+    # 职位还没配面试轮次：派单无从下手
     SESSION_NO_ROUND = "session.no_round"
     # 轮次存在却没有面试官：PRD 3.2 已收紧为矛盾状态，这里是防御性兜底
     SESSION_NO_INTERVIEWER = "session.no_interviewer"
@@ -111,6 +111,44 @@ class ErrorCode:
     WORKBENCH_NODE_NOT_FOUND = "workbench.node_not_found"
     # 向量库不可用：与「Milvus 不可用直接失败、不降级」同一口径（PRD §11.4）
     WORKBENCH_RAG_UNAVAILABLE = "workbench.rag_unavailable"
+
+    # Step3 公平性检查（PRD §3.4.3 / §6.5）
+    # 还没有问题链就做公平性检查：没有检查对象
+    WORKBENCH_FAIRNESS_NO_CHAIN = "workbench.fairness_no_chain"
+    # 处置的命中项不存在（扫描结果已被新一轮覆盖）
+    WORKBENCH_FINDING_NOT_FOUND = "workbench.finding_not_found"
+    # 阻断项不允许「保留」：BR-05 要求必改写
+    WORKBENCH_FAIRNESS_BLOCK_REQUIRED = "workbench.fairness_block_required"
+    # 保留警告项却没写原因：留痕是这个动作的唯一意义
+    WORKBENCH_FAIRNESS_REASON_REQUIRED = "workbench.fairness_reason_required"
+    # 没有可用的改写建议（模型没给，也没手动填）
+    WORKBENCH_FAIRNESS_NO_SUGGESTION = "workbench.fairness_no_suggestion"
+
+    # Step4 评分与面评（PRD §3.4.4 / §6.6）
+    # 没有矩阵就没有可评分的能力项
+    WORKBENCH_EVAL_NO_MATRIX = "workbench.eval_no_matrix"
+    # 一个分数一条笔记都没有，润色没有输入
+    WORKBENCH_EVAL_EMPTY = "workbench.eval_empty"
+    # 还没生成过润色稿就点采纳
+    WORKBENCH_EVAL_NO_POLISHED = "workbench.eval_no_polished"
+
+    # Step5 校准与提交（PRD §3.4.5 / §5.13）
+    # 提交是不可逆终态，前端弹窗之外后端再挡一道（与粉碎的 confirm 同口径）
+    WORKBENCH_CONFIRM_REQUIRED = "workbench.confirm_required"
+    # 结论下拉没选或取值非法
+    WORKBENCH_CONCLUSION_INVALID = "workbench.conclusion_invalid"
+    # BR-07 的完整性要求只在提交时拦：还有能力项没打分或没写依据
+    WORKBENCH_EVAL_INCOMPLETE = "workbench.eval_incomplete"
+    # 综合评价为空：面评没有定性，提交出去等于一份只有分数的表
+    WORKBENCH_EVAL_NO_SUMMARY = "workbench.eval_no_summary"
+    # Step3 没扫过 / 还是阻断状态：题目都没合规就交面评，等于跳过闸门
+    WORKBENCH_FAIRNESS_REQUIRED = "workbench.fairness_required"
+    # BR-06：各项均分 < 2 时结论只能是不通过（拦下来让他改选，不静默改写）
+    WORKBENCH_CONCLUSION_FORCED_FAIL = "workbench.conclusion_forced_fail"
+    # BR-07：结论不通过必须 ≥2 项评分 ≤2 且写明依据
+    WORKBENCH_FAIL_NEEDS_EVIDENCE = "workbench.fail_needs_evidence"
+    # 面评本身命中阻断级红线（「年纪偏大」这类），必须改完再交
+    WORKBENCH_SUBMISSION_BLOCKED = "workbench.submission_blocked"
 
 
 class AppError(HTTPException):

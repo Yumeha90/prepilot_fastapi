@@ -91,7 +91,9 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "dashboard:view",
         "position:view_assigned",
         "candidate:view_assigned",
-        "candidate:upload_resume",
+        # 不持有 candidate:upload_resume（BR-15 方案①，2026-10-04 拍板）：
+        # 建档（上传/解析/确认）统一由 HR 承担。面试官上传后候选人停在 pending 列，
+        # 而面试官看板只有 r1/r2 两列——他自己刚传的人自己看不见，规则自相矛盾。
         "workbench:enter_assigned",
         "evaluation:submit",
         "evaluation:view_own",

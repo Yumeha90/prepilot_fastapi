@@ -43,6 +43,8 @@ from app.models.session import (
     InterviewSession,
 )
 from app.models.user import User
+from app.observability import metrics, tracing
+from app.services import round_profile
 from app.schemas.workbench import (
     ChainIn,
     ChainNode,
@@ -54,6 +56,9 @@ from app.services.workbench import (
     blocked_reason,
     clean_text,
     ensure_can_edit,
+    invalidate_fairness,
+    observation_text,
+    plain_text,
     resume_digest,
 )
 
@@ -123,7 +128,7 @@ def chain_out(session: InterviewSession) -> ChainOut:
                     status=str(n.get("status") or EVIDENCE_MISSING),
                     main_question=str(n.get("main_question") or ""),
                     followups=n.get("followups") or [],
-                    observations=[str(o) for o in (n.get("observations") or [])],
+                    observations=[_obs(o) for o in (n.get("observations") or [])],
                     minutes=int(n.get("minutes") or 0),
                     rag_refs=[str(r) for r in (n.get("rag_refs") or [])],
                     flagged=bool(n.get("flagged")),
@@ -156,7 +161,11 @@ class _NodeLLM(BaseModel):
     capability: str = Field(default="", description="对应的能力项，必须与输入一致")
     main_question: str = Field(default="", description="主问题，不超过 30 字，一句话问完")
     followups: list[_FollowupLLM] = Field(default_factory=list, description="1-3 层追问")
-    observations: list[str] = Field(default_factory=list, description="评分观察点，至少 2 条")
+    # 用 Any 而非 str：模型偶发把观察点写成对象（{"type": "bad", "desc": "..."}），
+    # 声明成 str 会让整次生成直接校验失败 —— 结构可以事后还原，题目丢了才真没救。
+    observations: list[Any] = Field(
+        default_factory=list, description="评分观察点，至少 2 条，每条一句纯文本"
+    )
     minutes: int = Field(default=8, description="这一组题预计耗时（分钟）")
     rag_refs: list[str] = Field(
         default_factory=list, description="用到的内部资料标题，必须是给定资料里的原文标题"
@@ -185,10 +194,57 @@ CHAIN_SYSTEM_PROMPT = """你是资深面试官，要为一场真实面试设计�
    证据充足的能力项，追问重点放在「挖深度与边界」；证据缺失的，重点放在
    「判断是否真的具备」。
 5. `observations` 至少 2 条，写**可判分的观察点**（答出什么算好、答成什么样算差），
-   不要写「考察其沟通能力」这种无法判分的话。
+   不要写「考察其沟通能力」这种无法判分的话。每条**只写一句纯文本**，
+   **不要输出 JSON / 字典**（例如 `{"type": "bad", "desc": "..."}`）——
+   要区分好坏就在句子里直接写「答得好：…」「答得差：…」。
 6. `rag_refs` 只填你在给定内部资料里真正用到的标题，**照抄给定资料里的标题原文**
    （不要加《》，不要改写、不要缩写）。没用到就留空。
 7. 每个能力项只输出 1 个节点。"""
+
+
+# HR 面另起一套：技术资产库里没有「这个人稳不稳定」的资料，硬检索只会迫使模型
+# 拿技术文档去套 HR 维度，出来的题不伦不类。HR 面考的是**可核实的过往事实**，
+# 依据在简历里（任职时长、离职间隔、自述期望），不在组织资产库里。
+CHAIN_SYSTEM_PROMPT_HR = """你是资深 HR 面试官，要为一场 **HR 面**设计「问题链」。
+
+你会拿到：岗位与轮次、本轮时长、HR 面能力-证据矩阵、候选人简历摘要。
+HR 面不考技术能力（那些由技术面判定），要问清的是：**能不能来、待得住、要多少、为什么走**。
+
+出題方法：
+1. **行为面试法（STAR）**：问过去真实发生的事，不问假设和态度。
+   「你抗压能力怎么样」是无效问题；「过去一年里最紧的一次排期是什么，你怎么扛过去的」才有效。
+2. **追问拿事实，不拿表态**：候选人答得模糊时，追问具体时间、时长、频次、当时谁在场；
+   怀疑包装时，追问可核实的细节（离职交接人、通知期、offer 构成）而不是让他再表态一次。
+3. **禁止编造事实**：追问里的具体数字、公司名、时间，必须能在简历里找到；
+   找不到就不要写数字，改成让候选人自己给出。
+4. `main_question` 一句话问完，不超过 30 字；不要写成一段背景介绍。
+5. `followups` 每层给两条，分工不同：
+   - `vague`：答得模糊、只讲态度时，怎么追问拿到**行为证据**
+   - `anti_fake`：怀疑说法有水分时，怎么**用客观事实验证**（不是逼问，是交叉核对）
+6. `observations` 至少 2 条，写**可判分的观察点**（答出什么算好、答成什么样算差），
+   不要写「考察其稳定性」这种无法判分的话。每条**只写一句纯文本**，
+   **不要输出 JSON / 字典**（例如 `{"type": "bad", "desc": "..."}`）——
+   要区分好坏就在句子里直接写「答得好：…」「答得差：…」。
+7. `rag_refs` HR 面不使用内部资料，固定留空。
+8. 每个能力项只输出 1 个节点。
+
+**合规红线（违反即不合格，本轮必守）**：
+- 不得追问或暗示婚育计划、是否有孩子、何时生育
+- 不得评价或追问年龄、户籍、民族、宗教、健康状况与残疾
+- 薪资只问**期望区间与构成**，不得追问当前薪资明细、家庭收入或负债
+- 稳定性只能从**过往任职事实**（时长、离职原因、项目周期）去问，不从生活状况推断
+- 到岗约束只问客观事实（竞业、通知期、签证），不得以此施压透露隐私"""
+
+
+CHAIN_SYSTEM_PROMPT_TECH = CHAIN_SYSTEM_PROMPT  # 技术面是默认分支
+
+
+def chain_system_prompt(round_type: str | None) -> str:
+    return (
+        CHAIN_SYSTEM_PROMPT_HR
+        if round_profile.is_hr_round(round_type)
+        else CHAIN_SYSTEM_PROMPT_TECH
+    )
 
 
 def focus_rows(rows: list[dict]) -> list[dict]:
@@ -219,7 +275,7 @@ def focus_rows(rows: list[dict]) -> list[dict]:
 def retrieve(capability: str, focus: str, top_k: int = rag.DEFAULT_TOP_K) -> list[rag.AssetHit]:
     """检索组织技术资产库（可 mock：测试锁的是编排，不是向量库）。"""
     query = f"{capability}。考察重点：{focus}".strip()
-    return rag.search(query, top_k=top_k)
+    return rag.search_assets(query, top_k=top_k)
 
 
 def _asset_block(hits: list[rag.AssetHit]) -> str:
@@ -237,8 +293,10 @@ def _prompt(
     hits: dict[str, list[rag.AssetHit]],
     duration: int,
     round_name: str = "",
+    round_type: str = "",
     single: bool = False,
 ) -> str:
+    hr = round_profile.is_hr_round(round_type)
     matrix_lines = []
     for r in rows:
         matrix_lines.append(
@@ -246,6 +304,32 @@ def _prompt(
             f"证据：{r.get('evidence') or '无'}｜考察重点：{r.get('focus') or '无'}"
         )
     focus_lines = []
+    if hr:
+        # HR 面没有内部资料可检索：给「考察重点 + 合规红线」，不出「检索到的内部资料」段。
+        # 留着那段会让模型为了凑 rag_refs 去编造引用，反而把题目带偏。
+        for r in focus:
+            focus_lines.append(
+                f"【{r.get('capability')}】状态={r.get('status')}；"
+                f"考察重点={r.get('focus') or '无'}"
+            )
+        focus_block = (
+            "【本次要出题的考察维度】\n" + "\n".join(focus_lines) + "\n\n"
+            f"【合规红线（违反即不合格）】\n{round_profile.hr_redline_lines()}\n\n"
+        )
+        tail = (
+            "请只输出 1 个节点（对应上面这 1 个维度），换一种问法与切入角度。"
+            if single
+            else f"请为下面 {len(focus)} 个考察维度各输出 1 个节点。"
+        )
+        return (
+            f"岗位：{position.name}｜轮次：{round_name or 'HR 面'}"
+            f"（HR 面，不考技术能力）｜本轮时长：{duration} 分钟\n\n"
+            f"【HR 面能力-证据矩阵】\n" + "\n".join(matrix_lines) + "\n\n"
+            f"【候选人简历摘要】\n{resume_digest(candidate)}\n\n"
+            f"{focus_block}"
+            f"{tail}"
+        )
+
     for r in focus:
         focus_lines.append(
             f"【{r.get('capability')}】状态={r.get('status')}；"
@@ -268,13 +352,13 @@ def _prompt(
 
 
 
-async def _call_llm(prompt: str) -> _ChainLLM:
+async def _call_llm(prompt: str, system: str = CHAIN_SYSTEM_PROMPT) -> _ChainLLM:
     import asyncio
 
     return await asyncio.to_thread(
         structured_call,
         _ChainLLM,
-        CHAIN_SYSTEM_PROMPT,
+        system,
         prompt,
         timeout=120,
     )
@@ -327,12 +411,21 @@ def _match_refs(refs: list[str], allowed_titles: set[str]) -> list[str]:
     return out
 
 
-def _plain(text: str) -> str:
-    """去掉模型偶发吐出的 Markdown 标记（`**优秀**：` 这种在页面上很难看）。"""
-    s = clean_text(text)
+def _plain(text: Any) -> str:
+    """去掉模型偶发吐出的 Markdown 标记（`**优秀**：` 这种在页面上很难看）。
+
+    先过 `plain_text`：模型有时把一句话写成 JSON，页面上会露出
+    `{"type": "bad", "desc": "..."}`，那不是给用户看的东西。
+    """
+    s = clean_text(plain_text(text))
     s = s.replace("**", "").replace("`", "")
     s = re.sub(r"^\s*[*#]+\s*", "", s)
     return s.strip()
+
+
+def _obs(value: Any) -> str:
+    """评分观察点 → 人能读的一句话（JSON 只取正文与「好 / 差」）。"""
+    return _plain(observation_text(value))
 
 
 def _normalize(
@@ -364,7 +457,7 @@ def _normalize(
         if not followups:
             followups.append({"level": 1, "vague": "", "anti_fake": ""})
 
-        observations = [_plain(o) for o in node.observations]
+        observations = [_obs(o) for o in node.observations]
         observations = [o for o in observations if o][:MAX_OBSERVATIONS]
 
         out.append(
@@ -451,6 +544,7 @@ async def _generate_nodes(
     duration: int,
     *,
     round_name: str = "",
+    round_type: str = "",
     single: bool = False,
 ) -> list[dict]:
     prompt = _prompt(
@@ -461,9 +555,10 @@ async def _generate_nodes(
         hits=hits,
         duration=duration,
         round_name=round_name,
+        round_type=round_type,
         single=single,
     )
-    data = await _call_llm(prompt)
+    data = await _call_llm(prompt, system=chain_system_prompt(round_type))
     nodes = _normalize(data, focus, hits)
     if not nodes:
         raise bad_request(ErrorCode.LLM_FAILED, "AI 未产出有效的问题节点，请重试")
@@ -477,6 +572,10 @@ async def _generate_nodes(
         # 命中幻觉门禁：**重写一次**（不是无限重试）。重写后仍命中就打 flagged
         # 交给面试官确认 —— 静默通过等于没做门禁，无限重试则白烧 token
         logger.warning("问题链幻觉检测命中，触发一次重写：%s", offenders)
+        # 幻觉重写是质量门禁真正起作用的证据，必须能被数出来：
+        # 哪天这个数突然涨了，说明模型或提示词退化，而不是等面试官自己发现题目有假数字。
+        metrics.record_degraded("chain.generate", "hallucination_rewrite")
+        tracing.mark_degraded("幻觉检测命中，已重写一次", offenders=sorted(offenders))
         detail = "；".join(f"{k}（可疑数字：{'、'.join(v)}）" for k, v in offenders.items())
         retry_prompt = (
             prompt
@@ -511,10 +610,17 @@ def _hits_store(hits: dict[str, list[rag.AssetHit]]) -> dict[str, list[dict]]:
     }
 
 
+@tracing.ai_step("chain.generate")
 async def generate_chain(
     db, user: User, session: InterviewSession
 ) -> ChainOut:
     """C4 生成问题链（Celery 任务与测试共用；失败会向外抛，由调用方记录）。"""
+    tracing.add_metadata(
+        session_id=session.id,
+        position_id=session.position_id,
+        candidate_id=session.candidate_id,
+        round_type=session.round_type,
+    )
     ensure_can_edit(user, session)
     candidate = await db.get(Candidate, session.candidate_id)
     position = await db.get(Position, session.position_id)
@@ -537,15 +643,24 @@ async def generate_chain(
     focus = focus_rows(rows)
 
     hits: dict[str, list[rag.AssetHit]] = {}
-    for r in focus:
-        name = str(r.get("capability") or "")
-        hits[name] = retrieve(name, str(r.get("focus") or ""))
+    # HR 面不检索组织技术资产库：库里是技术文档与故障复盘，拿它去问「稳定性」只会
+    # 逼模型编引用。HR 面的依据在简历里，不在资产库里（round_profile 的注释同此理）。
+    if not round_profile.is_hr_round(session.round_type):
+        for r in focus:
+            name = str(r.get("capability") or "")
+            hits[name] = retrieve(name, str(r.get("focus") or ""))
 
     nodes = await _generate_nodes(
         position, candidate, rows, focus, hits, session.duration_minutes,
-        round_name=session.round_name,
+        round_name=session.round_name, round_type=session.round_type,
     )
     budget = balance_minutes(nodes, session.duration_minutes)
+    tracing.add_metadata(
+        nodes=len(nodes),
+        flagged=sum(1 for n in nodes if n.get("flagged")),
+        budget_minutes=budget,
+        retrieved_libraries=0 if round_profile.is_hr_round(session.round_type) else len(hits),
+    )
     return await _persist(
         db,
         session,
@@ -580,6 +695,10 @@ async def _persist(
     session.chain_status = CHAIN_READY
     session.chain_error = None
     session.updated_at = now
+    # 题目变了，上一轮的公平性结论就作废 —— 它是对旧文本给的，留着会让
+    # Step3 一进来就打勾（面试官以为检查过了，其实是上一次的结果）。
+    # **只清结论不动会话状态**：回到 Step3 重新扫一次即可，不用从头备面。
+    invalidate_fairness(session)
     # Step2 有产物即推进到 s3_draft；同样只前进不回退
     if session.status in (S1_DRAFT, S2_DRAFT):
         session.status = S3_DRAFT
@@ -599,7 +718,7 @@ def _clean_node(node: ChainNode, index: int) -> dict:
         if not vague and not anti_fake:
             continue
         followups.append({"level": j + 1, "vague": vague, "anti_fake": anti_fake})
-    observations = [_plain(o) for o in node.observations]
+    observations = [_obs(o) for o in node.observations]
     observations = [o for o in observations if o][:MAX_OBSERVATIONS]
     return {
         "id": clean_text(node.id) or f"n{index + 1}",
@@ -674,10 +793,14 @@ async def regenerate_node(
         (r for r in rows if str(r.get("capability") or "") == capability),
         {"id": current.get("row_id"), "capability": capability, "status": current.get("status"), "focus": ""},
     )
-    hits = {capability: retrieve(capability, str(row.get("focus") or ""))}
+    hits = (
+        {}
+        if round_profile.is_hr_round(session.round_type)
+        else {capability: retrieve(capability, str(row.get("focus") or ""))}
+    )
     nodes = await _generate_nodes(
         position, candidate, rows, [row], hits, session.duration_minutes,
-        round_name=session.round_name, single=True,
+        round_name=session.round_name, round_type=session.round_type, single=True,
     )
     if not nodes:
         raise bad_request(ErrorCode.LLM_FAILED, "AI 未产出有效的问题节点，请重试")
@@ -699,6 +822,65 @@ async def regenerate_node(
         generated=bool(data.get("generated")),
     )
     return ChainSaveOut(chain=chain, stale=False)
+
+
+def _set_node_text(node: dict, field: str, text: str) -> None:
+    """把文本写回节点的某个字段（公平性改写用）。
+
+    `field` 形如 `main_question` / `followup:1:vague` / `observation:0`。
+    定位不到就退回主问题 —— 改写总得落在某个地方，静默丢弃等于什么都没改。
+    """
+    if not field or field == "main_question":
+        node["main_question"] = text[:MAX_MAIN_QUESTION]
+        return
+    if field.startswith("followup:"):
+        parts = field.split(":", 2)
+        if len(parts) == 3:
+            _, level, key = parts
+            for f in node.get("followups") or []:
+                if isinstance(f, dict) and str(f.get("level")) == str(level):
+                    f[key] = text
+                    return
+    if field.startswith("observation:"):
+        try:
+            index = int(field.split(":", 1)[1])
+        except (TypeError, ValueError):
+            index = -1
+        observations = list(node.get("observations") or [])
+        if 0 <= index < len(observations):
+            observations[index] = text
+            node["observations"] = observations
+            return
+    node["main_question"] = text[:MAX_MAIN_QUESTION]
+
+
+async def patch_node_text(
+    db, session: InterviewSession, node_id: str, field: str, text: str
+) -> ChainOut:
+    """替换单个节点某个字段的文本，其余节点原样保留。
+
+    供 Step3 公平性「采纳改写」调用：改写只动被点名的那一句，
+    面试官手改过的其他题目不受影响（与「换一换」同一原则）。
+    """
+    data = dict(session.chain_json or {})
+    raw_nodes = [n for n in (data.get("nodes") or []) if isinstance(n, dict)]
+    index = next(
+        (i for i, n in enumerate(raw_nodes) if str(n.get("id") or "") == node_id), None
+    )
+    if index is None:
+        raise bad_request(ErrorCode.WORKBENCH_NODE_NOT_FOUND, "要改写的问题节点不存在")
+
+    node = dict(raw_nodes[index])
+    _set_node_text(node, field, text)
+    raw_nodes[index] = node
+    return await _persist(
+        db,
+        session,
+        raw_nodes,
+        budget=int(data.get("budget_minutes") or 0),
+        rag_hits=data.get("rag_hits") or {},
+        generated=bool(data.get("generated")),
+    )
 
 
 # ---------------------------------------------------------------- 异步状态

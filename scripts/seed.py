@@ -145,6 +145,17 @@ async def seed_role_permissions(
                 )
             )
         )
+        wanted = {permissions[code].id for code in codes}
+        # 差集回收：权限码从 ROLE_PERMISSIONS 里拿掉后（如 2026-10-04 收回面试官的
+        # candidate:upload_resume），只加不删会让旧库里的授权一直留着，改了等于没改。
+        # 只回收 PERMISSION_CATALOG 内的权限，不动手工塞进库的自定义授权。
+        catalog_ids = {p.id for p in permissions.values()}
+        for perm_id in (existing - wanted) & catalog_ids:
+            await db.execute(
+                role_permissions.delete()
+                .where(role_permissions.c.role_id == role.id)
+                .where(role_permissions.c.permission_id == perm_id)
+            )
         for code in codes:
             perm = permissions[code]
             if perm.id not in existing:
@@ -241,7 +252,7 @@ POSITION_SEEDS = [
             "bonuses": ["Kubernetes / 云原生经验", "高并发系统调优经验"],
         },
         [("r1", "interviewer@prepilot.dev"), ("r2", "interviewer2@prepilot.dev"),
-         ("hr", "hrlead@prepilot.dev"), ("offer", "hrlead@prepilot.dev")],
+         ("hr", "hrlead@prepilot.dev")],
     ),
     (
         "前端工程师（React）",
@@ -397,8 +408,11 @@ async def seed_notifications(db, users: dict[str, User]) -> None:
     await db.commit()
 
 
-def seed_org_assets() -> int:
-    """灌入「组织技术资产库」语料（PRD §6.4，供 C4 问题链 RAG 检索）。
+def seed_rag_libraries() -> None:
+    """灌入两个向量库（PRD §6.4）。
+
+    - `org_assets` 组织技术资产库 → C4 问题链（已实现）
+    - `compliance_cases` 合规案例库 → C5 公平性（S8 用，先把语料备好）
 
     **刻意为非致命**：seed 在每次部署后都会跑，而向量库走的是一条可能不通的链路
     （云端 → 本机 Milvus）。灌不进去就让部署失败，是拿运维事故给数据准备陪葬 ——
@@ -406,14 +420,22 @@ def seed_org_assets() -> int:
     """
     from app.ai import rag
     from app.ai.corpus import ORG_ASSETS
+    from app.ai.corpus_compliance import COMPLIANCE_CASES
 
-    try:
-        n = rag.ingest(ORG_ASSETS)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] 组织技术资产库灌入失败（不影响部署，问题链生成时会报错）：{exc}")
-        return 0
-    print(f"[ok] 组织技术资产库：新灌入 {n} 条 / 共 {len(ORG_ASSETS)} 条语料")
-    return n
+    for name, docs in (
+        (rag.ORG_ASSETS, ORG_ASSETS),
+        (rag.COMPLIANCE, COMPLIANCE_CASES),
+    ):
+        label = rag.LIBRARIES[name]
+        try:
+            added, updated, deleted = rag.ingest(name, docs)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] {label}灌入失败（不影响部署，用到时会报错）：{exc}")
+            continue
+        print(
+            f"[ok] {label}：新增 {added} / 更新 {updated} / 删除 {deleted} "
+            f"/ 共 {len(docs)} 条语料"
+        )
 
 
 async def run() -> int:
@@ -437,7 +459,9 @@ async def run() -> int:
             print(f"[ok] 演示职位 {positions} 个")
             for email, _, role_code in USER_SEEDS:
                 print(f"       {role_code:<12} {email}")
-            seed_org_assets()
+
+    # 向量语料不属于演示数据：生产环境也必须有，放在 SEED_DEMO_DATA 判断之外
+    seed_rag_libraries()
 
     print("done.")
     return 0

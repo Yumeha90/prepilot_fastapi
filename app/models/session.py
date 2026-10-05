@@ -30,15 +30,17 @@ SUBMITTED = "submitted"
 SESSION_STATUSES = (S1_DRAFT, S2_DRAFT, S3_DRAFT, S4_DRAFT, S5_DRAFT, SUBMITTED)
 
 # 轮次类型 → 应聘记录阶段
+# v1.26：删掉 offer 轮 —— 它不建会话、不进工作台，推进过去只改个阶段，
+# 而 HR 本来就能在任意阶段直接「录用」，这一步必然被绕过，留着只是个空转列。
 ROUND_STAGE = {
     "r1": "in_r1",
     "r2": "in_r2",
     "hr": "in_hr",
-    "offer": "in_offer",
 }
 
-# Offer 轮是终结处置节点，不是面试（PRD 3.2）：不产生面评、不进工作台
-NON_INTERVIEW_ROUNDS = ("offer",)
+# 不派会话的轮次类型。删掉 offer 轮后为空，保留常量是为了让
+# `pick_first_round` 的判断继续成立（将来再加非面试节点时不用改调用方）
+NON_INTERVIEW_ROUNDS: tuple[str, ...] = ()
 
 # 本轮默认时长（分钟）—— P09 顶部信息条可改，改的是会话不是职位
 DEFAULT_DURATION_MINUTES = 45
@@ -63,6 +65,59 @@ CHAIN_RUNNING = "running"
 CHAIN_READY = "ready"
 CHAIN_FAILED = "failed"
 CHAIN_STATUSES = (CHAIN_IDLE, CHAIN_RUNNING, CHAIN_READY, CHAIN_FAILED)
+
+
+# Step3 公平性检查的结论三态（PRD §3.4.3：通过 / 警告 / 阻断）
+FAIRNESS_IDLE = "idle"
+FAIRNESS_PASS = "pass"
+FAIRNESS_WARN = "warn"
+FAIRNESS_BLOCK = "block"
+FAIRNESS_RESULTS = (FAIRNESS_IDLE, FAIRNESS_PASS, FAIRNESS_WARN, FAIRNESS_BLOCK)
+
+# 命中项的等级：阻断 / 警告 / 提示
+LEVEL_BLOCK = "block"
+LEVEL_WARN = "warn"
+LEVEL_INFO = "info"
+FAIRNESS_LEVELS = (LEVEL_BLOCK, LEVEL_WARN, LEVEL_INFO)
+
+# 检查项（PRD §5.5 P11 的六行检查表）
+CHECK_MARRIAGE = "marriage"
+CHECK_AGE = "age"
+CHECK_GENDER = "gender"
+CHECK_REGION = "region"
+CHECK_HEALTH = "health"
+CHECK_LEADING = "leading"
+FAIRNESS_CATEGORIES = (
+    CHECK_MARRIAGE,
+    CHECK_AGE,
+    CHECK_GENDER,
+    CHECK_REGION,
+    CHECK_HEALTH,
+    CHECK_LEADING,
+)
+
+# 命中项处置：待处理 / 已改写 / 已保留（保留必须写原因）
+DISPOSITION_PENDING = "pending"
+DISPOSITION_REWRITTEN = "rewritten"
+DISPOSITION_ACCEPTED = "accepted"
+
+# ---- Step4 评分与面评（PRD §3.4.4 / §6.6）----
+# 1–5 星：**行为化评分**打的是「这一项在面试里的表现」，不是给候选人打总分
+SCORE_MIN = 1
+SCORE_MAX = 5
+# 自动保存的草稿也要有边界：证据一句话说清就够，写成长篇就不是「证据」而是面评正文
+MAX_EVIDENCE_LEN = 500
+MAX_EVIDENCES_PER_ITEM = 6
+MAX_NOTE_LEN = 1_000
+MAX_SUMMARY_LEN = 4_000
+NO_SCORE = 0  # 前端/接口的「未评分」哨兵（score 为 None 时序列化成 0）
+
+# ---- Step5 校准与提交（PRD §3.4.5 / §5.13）----
+# 面试结论三态：面试官只交结论，**不指定下一轮**（BR-06 —— 下一轮由 HR 在看板处置）
+CONCLUSION_PASS = "pass"
+CONCLUSION_PENDING = "pending"
+CONCLUSION_FAIL = "fail"
+CONCLUSIONS = (CONCLUSION_PASS, CONCLUSION_PENDING, CONCLUSION_FAIL)
 
 
 class InterviewSession(Base):
@@ -116,6 +171,25 @@ class InterviewSession(Base):
     chain_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 失败原因落库：页面上要能区分「向量库不可用」与「AI 没产出内容」
     chain_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- Step3 公平性检查（同步扫描，PRD §3.4.3 / §6.5）----
+    fairness_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    fairness_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fairness_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # ---- Step4 评分与面评（PRD §3.4.4 / §6.6）----
+    # 逐能力项 1–5 星 + 证据 + 综合评价；润色稿与原文并存（BR-08）
+    evaluation_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    evaluation_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    evaluation_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # ---- Step5 校准与提交（PRD §3.4.5 / §5.13）----
+    # 面试结论（pass / pending / fail）：单独成列是因为它是查询维度，
+    # P17 面评详情要按结论展示，塞在 JSONB 里没法直接 where
+    conclusion: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 提交那一刻的合规扫描快照（命中项 + 依据 + 扫描时间），提交后只读
+    submission_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

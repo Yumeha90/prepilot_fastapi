@@ -3,7 +3,7 @@
 三条核心规则落在这里：
 - BR-01  JD 拆解必须人工确认才生效（未确认只写 `jd_draft_json`）
 - BR-20  核心能力 ≥3 项、权重步进 5、合计必须 = 100
-- BR-23  轮次 ≤4、每类型至多 1 个、末位须 hr/offer、允许跳过 HR 面
+- BR-23  轮次 ≤4、每类型至多 1 个、末位须 hr、允许跳过 HR 面之外的中间轮
 
 另有两个 2026-09-30 定下的实现口径：
 - `jd_hash` 规范化摘要：只改原文/名称/状态**不 bump 版本**（避免空版本刷屏）
@@ -25,13 +25,13 @@ from app.models.user import User
 from app.schemas.position import CompetencyIn, JdIn, RoundIn
 from app.services.match_score import count_current_scores, mark_scores_stale
 
-# 轮次类型与上限（BR-23）
-ROUND_TYPES = ("r1", "r2", "hr", "offer")
+# 轮次类型与上限（BR-23）。v1.26：删掉 offer —— 流程末位固定为 HR 面试
+ROUND_TYPES = ("r1", "r2", "hr")
 MAX_ROUNDS = 4
-TERMINAL_TYPES = ("hr", "offer")
+TERMINAL_TYPES = ("hr",)
 
 # 轮次默认名称（前端走 i18n，这里只兜底）
-ROUND_DEFAULT_NAME = {"r1": "技术一面", "r2": "技术二面", "hr": "HR 面试", "offer": "Offer 审批"}
+ROUND_DEFAULT_NAME = {"r1": "技术一面", "r2": "技术二面", "hr": "HR 面试"}
 
 STATUS_TRANSITIONS = {
     "draft": {"open", "closed"},
@@ -252,17 +252,17 @@ def validate_rounds(rounds: list[RoundIn]) -> None:
     if len(set(types)) != len(types):
         raise bad_request(ErrorCode.ROUNDS_INVALID, "每种轮次类型最多只能出现 1 次")
     if types[-1] not in TERMINAL_TYPES:
-        raise bad_request(ErrorCode.ROUNDS_INVALID, "流程末位必须是 HR 面试或 Offer 轮")
+        raise bad_request(ErrorCode.ROUNDS_INVALID, "流程末位必须是 HR 面试")
     if not set(types) & set(TERMINAL_TYPES):
         raise bad_request(
-            ErrorCode.ROUNDS_INVALID, "HR 面试与 Offer 轮至少需要存在一个（终止节点）"
+            ErrorCode.ROUNDS_INVALID, "面试流程必须包含 HR 面试（HR 面后由 HR 做终结处置）"
         )
     if "r1" in types and "r2" in types and types.index("r1") > types.index("r2"):
         raise bad_request(ErrorCode.ROUNDS_INVALID, "技术一面（r1）必须排在二面（r2）之前")
     if "r2" in types and "r1" not in types:
         raise bad_request(ErrorCode.ROUNDS_INVALID, "配置了二面（r2）就必须先配一面（r1）")
 
-    # PRD 只对 r1/r2/offer 强制要求责任人；此处对 hr 一并要求，
+    # PRD 只对 r1/r2 强制要求责任人；此处对 hr 一并要求，
     # 否则 3.3 派单时会「无面试官可派」，属于提前收紧而非新增规则。
     for r in rounds:
         if r.interviewer_id is None:

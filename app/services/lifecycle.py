@@ -1,6 +1,6 @@
 """数据生命周期服务（PRD 3.5.1 P15 / BR-10 / §7.7）。
 
-三条口径：
+四条口径：
 1. **粉碎只清内容、行保留**（D7）：清空简历原文、解析结果与文件名，置
    `purged_at` 与 `profile_status=archived`。候选人的应聘记录、会话、匹配分全部不动 ——
    流程事实不是隐私数据，删了就看板空洞、P18 无法回答「当年按哪版标准算的分」。
@@ -8,6 +8,11 @@
    招聘流程，自动扫描与手动粉碎都跳过它，否则等于把在职员工简历删了。
 3. **定时任务与手动粉碎共用一条清除逻辑**，只是 `purge_source` 不同：
    两条路径各写一遍迟早会不一致（比如一边清了文件名一边没清）。
+4. **面评原文同属粉碎范围**（§10 待办，3.4 落地后补齐）：简历清了、面评里却
+   留着「候选人说…」的证据原文与整段综合评价，等于没清 —— 面评是对这个人的
+   **评价性**个人信息，比简历更敏感。清法与简历同口径：**只清正文、保留结构**，
+   评分与能力项名留着（那是流程事实），证据与笔记正文清空。
+   矩阵里的「简历证据」摘要同此口径：它是从简历原文摘来的片段。
 
 停用的语义：策略 `enabled=false` 时定时任务照跑（更新 `last_run_at` 让页面看得到
 「它确实在跑」），但一条都不粉碎 —— 与「干脆不跑」相比，更好排查。
@@ -26,7 +31,9 @@ from app.models.candidate import Application
 from app.models.lifecycle import CURRENT, HISTORY, PURGE_AUTO, PURGE_MANUAL, RetentionPolicy
 from app.models.lifecycle import RESOURCE_RESUME
 from app.models.position import Position
+from app.models.session import InterviewSession
 from app.models.user import User
+from app.observability import metrics, tracing
 from app.schemas.lifecycle import (
     AutoPurgeOut,
     LifecycleOut,
@@ -256,7 +263,87 @@ def _as_utc(value: datetime | None) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-# ---------------------------------------------------------------- 粉碎
+# ---------------------------------------------------------------- 粉碎：面评与简历证据
+
+
+def purge_evaluation(session: InterviewSession) -> bool:
+    """清掉一个会话里的面评正文（行与结构保留）。
+
+    **保留什么**：能力项名、评分（`score`）、证据的 quote 标记之外的结构 ——
+    这些是「当年按哪版标准、给了几分」的流程事实，也是 P17 回看的骨架。
+    **清掉什么**：综合评价正文、采纳前的原文、润色稿、逐条证据文本与快记 ——
+    这些是对这个人的**描述与评价**，是 §10 粉碎范围的主体。
+    """
+    # 刻意 copy 一份再改：SQLAlchemy 按**对象身份**判定 JSONB 是否变过，
+    # 原地改完再赋回去（`data = session.evaluation_json` → 改 → 赋回）会被判成没变，
+    # UPDATE 根本不发 —— 页面显示已粉碎，库里原文还在，是最难查的那种 bug。
+    data = dict(session.evaluation_json or {})
+    if not data:
+        return False
+    items: list[dict] = []
+    for raw in data.get("items") or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        item["evidences"] = []
+        item["note"] = ""
+        items.append(item)
+    data["items"] = items
+    data["summary"] = ""
+    data["summary_original"] = ""
+    data["polished"] = ""
+    data["polished_flags"] = []
+    # 留痕：P17 要能显示「内容已按保留策略粉碎」，而不是显示一片空白让人以为没写
+    data["content_purged"] = True
+    data["purged_at"] = _now().isoformat()
+    session.evaluation_json = data
+
+    # 提交快照里的命中片段同样来自面评正文
+    submission = dict(session.submission_json or {})
+    if submission:
+        submission["flags"] = []
+        session.submission_json = submission
+    return True
+
+
+def purge_matrix_evidence(session: InterviewSession) -> None:
+    """矩阵里的「简历证据」是从简历原文摘的片段 —— 简历清了它也要清。
+
+    考察重点（`focus`）与能力项名留下：那是面试官写的备面思路，不含个人信息。
+    """
+    # 同上：整体换新对象，行也逐条 copy，避免把共享的嵌套 dict 一起改脏
+    data = dict(session.matrix_json or {})
+    rows = data.get("rows")
+    if not isinstance(rows, list):
+        return
+    new_rows: list = []
+    for row in rows:
+        if isinstance(row, dict):
+            item = dict(row)
+            item["evidence"] = ""
+            new_rows.append(item)
+        else:
+            new_rows.append(row)
+    data["rows"] = new_rows
+    session.matrix_json = data
+
+
+async def purge_evaluations(db: AsyncSession, candidate_id: int) -> int:
+    """清掉该候选人**所有会话**（含草稿与已提交）里的面评正文，返回清了几个会话。"""
+    sessions = list(
+        await db.scalars(
+            select(InterviewSession).where(
+                InterviewSession.candidate_id == candidate_id
+            )
+        )
+    )
+    touched = 0
+    for session in sessions:
+        purge_matrix_evidence(session)
+        if purge_evaluation(session):
+            touched += 1
+        session.updated_at = _now()
+    return touched
 
 
 async def purge(
@@ -299,8 +386,22 @@ async def purge(
         candidate.updated_at = _now()
         result.purged += 1
         result.purged_ids.append(candidate.id)
+        # §10：面评原文与矩阵里的简历证据摘要同属粉碎范围
+        result.evaluations_purged += await purge_evaluations(db, candidate.id)
 
     await db.commit()
+    # 按「实际粉碎的人数」计数（不是按请求数），否则面板上的数字对不上合规记录
+    metrics.BUSINESS_OPS.labels(op=f"lifecycle.purge.{source}", status="ok").inc(
+        result.purged
+    )
+    tracing.add_metadata(
+        requested=result.requested,
+        purged=result.purged,
+        skipped_accepted=result.skipped_accepted,
+        skipped_missing=result.skipped_missing,
+        skipped_purged=result.skipped_purged,
+        evaluations_purged=result.evaluations_purged,
+    )
     return result
 
 
@@ -325,6 +426,7 @@ async def run_auto_purge(db: AsyncSession) -> AutoPurgeOut:
         policy.last_purged = 0
         await db.commit()
         await db.refresh(policy)
+        metrics.record_op("lifecycle.auto_purge", "skipped_disabled")
         return AutoPurgeOut(enabled=False, days=policy.days, scanned=0, purged=0,
                             ran_at=policy.last_run_at)
 
@@ -334,6 +436,9 @@ async def run_auto_purge(db: AsyncSession) -> AutoPurgeOut:
     policy.last_purged = purged.purged
     await db.commit()
     await db.refresh(policy)
+    # 粉碎是不可逆的合规动作，每一次都必须留下计数，运维要能对得上「扫描到 / 已粉碎」
+    metrics.record_op("lifecycle.auto_purge", "ok")
+    tracing.add_metadata(scanned=len(result.items), purged=purged.purged, days=policy.days)
     if purged.purged:
         logger.info("定时粉碎：到期 %s 人，已粉碎 %s 人", result.total, purged.purged)
     return AutoPurgeOut(

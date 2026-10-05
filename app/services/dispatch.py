@@ -2,8 +2,8 @@
 
 口径：
 - **D5 确认即派单**：简历确认后按「流程配置」派到首轮面试官，并建首轮会话。
-- **首轮 = seq 最小且不是 offer 的轮次**。offer 是终结处置节点、不产生面评（PRD 3.2），
-  把它当首轮派出去没有意义。
+- **首轮 = seq 最小的轮次**（`NON_INTERVIEW_ROUNDS` 里的非面试节点不当首轮；
+  v1.26 删掉 offer 轮后该集合为空，判断保留是为了将来加非面试节点时不用改调用方）。
 - **轮次信息做快照**：流程配置变更只对未来的应聘记录生效，已派单的会话不跟随。
 - 派单失败（没配轮次 / 轮次没面试官）**不回滚确认**：确认是已经完成的业务动作，
   回滚它是错的。调用方拿到失败原因后自行提示，候选人停在 `pending` 等补齐配置。
@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ErrorCode, bad_request, forbidden, not_found
@@ -31,7 +31,7 @@ def _now() -> datetime:
 
 
 def pick_first_round(rounds: list[PositionRound]) -> PositionRound:
-    """首轮 = seq 最小且不是 offer 的轮次。"""
+    """首轮 = seq 最小且不是非面试轮次的轮次（见 `NON_INTERVIEW_ROUNDS`）。"""
     candidates = [r for r in rounds if r.type not in NON_INTERVIEW_ROUNDS]
     if not candidates:
         raise bad_request(
@@ -128,25 +128,47 @@ async def dispatch_first_round(
 # ---------------------------------------------------------------- 可见性
 
 
-async def visible_session_ids(db: AsyncSession, user: User) -> list[int] | None:
+async def visible_session_ids(
+    db: AsyncSession, user: User, *, current_round_only: bool = True
+) -> list[int] | None:
     """返回该用户可见的会话 id；None 表示不限制。
 
     用**权限码**而不是数据范围来判：`workbench:enter_all`（HR 主管）/ `enter_view`（HR，只读）
     能看全部；`workbench:enter_assigned`（面试官）只看派给自己的（BR-16）。
     数据范围表里没有 workbench 这个 resource，硬加一项还得重新播种云端库，不划算。
+
+    **`current_round_only`（默认开）**：一条应聘记录每轮一条会话，HR 推进/退回都可能
+    提前建出下一轮的会话。只按 `interviewer_id` 过滤，二面面试官会在 HR 还没推进时
+    就看到候选人的二面记录（一面还没结束，他点进去是空的），流程顺序被打乱。
+    所以「我的备面」列表再卡一道 `round_id == 应聘记录当前轮次`。
+
+    **为什么查看（ensure_can_view_session）要传 False**：面试官提交完一轮后，HR 一推进
+    他就得能回看自己写过的那份面评（P17）。列表里不出现是「没轮到你别来备面」，
+    点进去还能看是「你写的东西你得看得见」——两件事，不是一个口径。
+    此时 `can_edit` 另按当前轮次判 false，进去是只读，写不了。
     """
     perms = user_permissions(user)
     if "workbench:enter_all" in perms or "workbench:enter_view" in perms:
         return None
-    rows = await db.scalars(
-        select(InterviewSession.id).where(InterviewSession.interviewer_id == user.id)
-    )
+    stmt = select(InterviewSession.id).where(InterviewSession.interviewer_id == user.id)
+    if current_round_only:
+        stmt = (
+            stmt.outerjoin(Application, Application.id == InterviewSession.application_id).where(
+                or_(
+                    Application.id.is_(None),  # 没有应聘记录的会话（历史数据）按老口径放行
+                    Application.current_round_id.is_(None),
+                    Application.current_round_id == InterviewSession.round_id,
+                )
+            )
+        )
+    rows = await db.scalars(stmt)
     return list(set(rows))
 
 
 async def ensure_can_view_session(
     db: AsyncSession, user: User, session: InterviewSession
 ) -> None:
-    allowed = await visible_session_ids(db, user)
+    # 只要派给过自己就允许查看（历史轮次留给 P17 回看），能不能写在 can_edit 里判
+    allowed = await visible_session_ids(db, user, current_round_only=False)
     if allowed is not None and session.id not in allowed:
         raise forbidden("无权查看该会话")

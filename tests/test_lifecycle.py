@@ -20,6 +20,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal, engine
 from app.main import app
 from app.models.candidate import Application, Candidate
+from app.models.user import User
 
 RESUME = """钱到期
 邮箱 old@example.com  电话 13700137000  上海
@@ -262,6 +263,75 @@ async def _scenario_accepted_protected() -> None:
         assert (await _candidate_row(cid)).resume_raw_text != ""
 
 
+async def _scenario_purge_evaluation_content() -> None:
+    """§10：面评原文同属粉碎范围 —— 简历清了、面评里还留着「候选人说…」等于没清。
+
+    清法与简历同口径：**只清正文、保留结构**，评分与能力项名留着（流程事实）。
+    """
+    from sqlalchemy import select
+
+    from app.models.session import InterviewSession
+    from app.schemas.workbench import EvaluationIn
+    from app.services import evaluation as ev
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        hr = await _login(client)
+        admin = await _login(client, "admin@prepilot.dev")
+        pid = await _new_position(client, hr)
+        cid, _ = await _new_candidate(client, hr, pid)
+        await _age_candidate(cid, 100)
+
+        async with SessionLocal() as db:
+            rows = list(
+                await db.scalars(
+                    select(InterviewSession).where(InterviewSession.candidate_id == cid)
+                )
+            )
+            assert rows, "派单后应该已经建了会话"
+            session = rows[0]
+            interviewer = await db.get(User, session.interviewer_id)
+            # 手工造一份面评（绕开矩阵：这里只关心粉碎逻辑本身）
+            session.matrix_json = {"rows": [{"id": "m1", "capability": "Java", "evidence": "高级工程师 5 年"}]}
+            await db.commit()
+            items = [
+                {
+                    "row_id": "m1",
+                    "capability": "Java",
+                    "score": 4,
+                    "evidences": [{"id": "e1", "text": "候选人说他在 D 公司主导过重构", "quote": True}],
+                    "note": "思路清楚",
+                }
+            ]
+            await ev.save_draft(
+                db, interviewer, session, EvaluationIn(items=items, summary="整体可以推进")
+            )
+
+        done = await client.post(
+            f"{BASE}/purge", json={"candidate_ids": [cid], "confirm": True}, headers=admin
+        )
+        assert done.status_code == 200, done.text
+        assert done.json()["purged"] == 1
+        assert done.json()["evaluations_purged"] >= 1
+
+        async with SessionLocal() as db:
+            session = (
+                await db.scalars(
+                    select(InterviewSession).where(InterviewSession.candidate_id == cid)
+                )
+            ).first()
+            assert session is not None
+            data = session.evaluation_json or {}
+            assert data["summary"] == ""
+            assert data["content_purged"] is True
+            # 评分与能力项名是流程事实，不跟着清
+            assert data["items"][0]["score"] == 4
+            assert data["items"][0]["capability"] == "Java"
+            assert data["items"][0]["evidences"] == []
+            assert data["items"][0]["note"] == ""
+            # 矩阵里的简历证据摘要同样清掉（它是从简历原文摘的片段）
+            assert session.matrix_json["rows"][0]["evidence"] == ""
+
+
 async def _scenario_auto_purge_and_policy() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         hr = await _login(client)
@@ -353,6 +423,10 @@ def test_lifecycle_scan_and_manual_purge():
 
 def test_lifecycle_accepted_not_purged():
     _run(_scenario_accepted_protected())
+
+
+def test_lifecycle_purge_clears_evaluation_content():
+    _run(_scenario_purge_evaluation_content())
 
 
 def test_lifecycle_auto_purge_and_policy():

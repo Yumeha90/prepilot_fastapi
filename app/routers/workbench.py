@@ -26,10 +26,21 @@ from app.schemas.workbench import (
     ChainSaveOut,
     ChainTaskOut,
     DurationIn,
+    EvaluationIn,
+    EvaluationOut,
+    EvaluationSaveOut,
+    FairnessAcceptIn,
+    FairnessOut,
+    FairnessRewriteIn,
     MatrixIn,
     MatrixSaveOut,
+    SubmissionIn,
+    SubmissionOut,
     WorkbenchOut,
 )
+from app.services import evaluation as eval_svc
+from app.services import fairness as fairness_svc
+from app.services import submission as submission_svc
 from app.services import workbench as svc
 from app.services import question_chain as qc
 from app.tasks.tasks import generate_question_chain
@@ -143,3 +154,131 @@ async def regenerate_node(
     """「换一换」：只重生成这一个节点。单节点一次模型调用，同步返回。"""
     session = await svc.get_session_or_404(db, session_id)
     return await qc.regenerate_node(db, user, session, node_id)
+
+
+# ---------------------------------------------------------------- Step3 公平性
+
+
+@router.post("/sessions/{session_id}/fairness/scan", response_model=FairnessOut)
+async def scan_fairness(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> FairnessOut:
+    """C5 公平性扫描（同步，P95 ≤ 10s）。
+
+    问题链生成时已经自动预扫过一次（PRD §6.4 质量门禁），这里是**改完之后**的复扫：
+    面试官手改过题目、或只是想再看一次结论，都走这个接口。
+    """
+    session = await svc.get_session_or_404(db, session_id)
+    return await fairness_svc.scan(db, user, session)
+
+
+@router.post(
+    "/sessions/{session_id}/fairness/findings/{finding_id}/apply",
+    response_model=FairnessOut,
+)
+async def apply_rewrite(
+    session_id: int,
+    finding_id: str,
+    payload: FairnessRewriteIn | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> FairnessOut:
+    """采纳改写：替换问题文本后**重新扫描**，返回新的结论。"""
+    session = await svc.get_session_or_404(db, session_id)
+    return await fairness_svc.apply_rewrite(db, user, session, finding_id, payload)
+
+
+@router.post(
+    "/sessions/{session_id}/fairness/findings/{finding_id}/accept",
+    response_model=FairnessOut,
+)
+async def accept_finding(
+    session_id: int,
+    finding_id: str,
+    payload: FairnessAcceptIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> FairnessOut:
+    """警告级「保留并记录原因」：不改写但必须写明为什么这么问是合理的。"""
+    session = await svc.get_session_or_404(db, session_id)
+    return await fairness_svc.accept_finding(db, user, session, finding_id, payload)
+
+
+# ---------------------------------------------------------------- Step4 评分与面评
+
+
+@router.put("/sessions/{session_id}/evaluation", response_model=EvaluationSaveOut)
+async def save_evaluation(
+    session_id: int,
+    payload: EvaluationIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> EvaluationSaveOut:
+    """整块保存评分草稿：手动保存与 30 秒自动保存（BR-13）共用这一个接口。
+
+    **刻意不做完整性校验**：写一半就被拦在门外，等于逼面试官先编一条证据出来。
+    缺哪些能力项由返回体里的 `incomplete_count` / `missing` 提示，提交时（Step5）才拦。
+    """
+    session = await svc.get_session_or_404(db, session_id)
+    return await eval_svc.save_draft(db, user, session, payload)
+
+
+@router.post("/sessions/{session_id}/evaluation/polish", response_model=EvaluationOut)
+async def polish_evaluation(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> EvaluationOut:
+    """C6 面评润色（同步）。润色稿**并存不覆盖**原文，要显式采纳才生效（BR-08）。
+
+    生成后立刻跑一次二次合规扫描，命中落进 `polished_flags` 常驻警示。
+    """
+    session = await svc.get_session_or_404(db, session_id)
+    return await eval_svc.polish(db, user, session)
+
+
+@router.post("/sessions/{session_id}/evaluation/adopt", response_model=EvaluationOut)
+async def adopt_polished(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> EvaluationOut:
+    """采纳润色稿：覆写综合评价正文，原文留进 `summary_original`（P17 双栏对比）。"""
+    session = await svc.get_session_or_404(db, session_id)
+    return await eval_svc.adopt_polished(db, user, session)
+
+
+# ---------------------------------------------------------------- Step5 校准与提交
+
+
+@router.post("/sessions/{session_id}/submission/scan", response_model=SubmissionOut)
+async def scan_submission(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> SubmissionOut:
+    """提交前的合规扫描（只看不改）。
+
+    单独给一个口子而不是只在提交时扫：点了提交才知道被拦，面试官得回 Step4 改完
+    再走一遍流程 —— 先扫一次，被拦的原因在提交之前就摆在他面前。
+    """
+    session = await svc.get_session_or_404(db, session_id)
+    return await submission_svc.scan(db, user, session)
+
+
+@router.post("/sessions/{session_id}/submission", response_model=SubmissionOut)
+async def submit_evaluation(
+    session_id: int,
+    payload: SubmissionIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_any_perm(*ENTER_PERMS)),
+) -> SubmissionOut:
+    """提交面评（终态）：校验完整性 → 过合规扫描 → 落结论 → 会话置 `submitted`。
+
+    `confirm=true` 是后端这道闸（与粉碎同口径）。提交后**不变更候选人阶段**：
+    面试官只交结论与面评，下一轮由 HR 在 P08 处置（BR-06）。
+    """
+    session = await svc.get_session_or_404(db, session_id)
+    return await submission_svc.submit(db, user, session, payload)

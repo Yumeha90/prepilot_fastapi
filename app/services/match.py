@@ -28,6 +28,7 @@ from app.core.config import get_settings
 from app.models.candidate import CONFIRMED, Application, Candidate
 from app.models.match_score import CURRENT, STALE, MatchScore
 from app.models.position import Position
+from app.observability import metrics, tracing
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -451,6 +452,7 @@ def _snapshot(row: MatchScore) -> dict:
     }
 
 
+@tracing.ai_step("match.compute")
 async def compute(
     db: AsyncSession, application: Application, *, enqueue_explain: bool = True
 ) -> MatchScore:
@@ -548,6 +550,7 @@ _EXPLAIN_SYSTEM = (
 )
 
 
+@tracing.ai_step("match.explain")
 async def generate_summary(db: AsyncSession, match_score_id: int) -> bool:
     """异步补写 AI 总结。返回是否成功。失败只置 failed，不动分数。"""
     row = await db.get(MatchScore, match_score_id)
