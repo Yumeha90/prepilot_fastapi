@@ -42,7 +42,7 @@ import Forbidden from '@/pages/Forbidden'
 import { useAuthStore } from '@/store/auth'
 import { guessResumeBasic, type ResumeBasicGuess } from '@/utils/resumeBasic'
 
-const { Text, Title, Paragraph } = Typography
+const { Text, Paragraph } = Typography
 
 export default function CandidateUpload() {
   const { t } = useTranslation()
@@ -296,7 +296,6 @@ export default function CandidateUpload() {
           </Space>
         }
       >
-        <Title level={5}>{t('candidate.authTitle')}</Title>
         {[1, 2, 3, 4].map((i) => (
           <Paragraph key={i}>{t(`candidate.authBody${i}`)}</Paragraph>
         ))}

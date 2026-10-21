@@ -58,4 +58,14 @@ describe('上传页授权弹框', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看授权全文' }))
     expect(await screen.findByRole('button', { name: '我已阅读并确认已取得授权' })).toBeTruthy()
   })
+
+  it('标题只出现一次（Modal 自带 title，正文不再重复一个 Title）', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看授权全文' }))
+    const modalTitle = await screen.findByText('数据处理授权')
+    expect(modalTitle.className).toContain('ant-modal-title')
+    // 全文只此一处，正文里不再有同名标题
+    expect(screen.getAllByText('数据处理授权').length).toBe(1)
+  })
 })
