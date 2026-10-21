@@ -45,11 +45,41 @@ logger = logging.getLogger(__name__)
 MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR", "")
 if MULTIPROC_DIR:
     os.makedirs(MULTIPROC_DIR, exist_ok=True)
-    for stale in glob.glob(os.path.join(MULTIPROC_DIR, "*.db")):
+
+
+def _purge_dead_process_files() -> None:
+    """只清**已死进程**留下的 mmap 文件，且只清本角色自己的目录。
+
+    **这里踩过大坑**：早期版本在 import 时把整个目录清空。后果是任何
+    `docker exec -i prepilot-api python ...`（只要导入了本模块）都会把正在提供服务的
+    api 进程的指标文件删掉 —— 表现为 Grafana 面板突然空白、app_info 消失，
+    而且极难归因，看起来像"指标自己没了"。自检脚本查 Milvus 语料那一步也中过招。
+
+    **为什么只清自己的目录**：三个容器各有独立 pid 命名空间，在 api 里查 celery worker
+    的 pid 一定查不到，跨目录清理会把兄弟容器的实时指标删掉。
+    """
+    if not MULTIPROC_DIR:
+        return
+    for path in glob.glob(os.path.join(MULTIPROC_DIR, "*.db")):
+        pid = os.path.basename(path).rsplit("_", 1)[-1].removesuffix(".db")
+        if not pid.isdigit():
+            continue
+        # 用 os.kill(pid, 0) 判活（POSIX 通用）。不能查 /proc/<pid>：macOS 根本没有
+        # /proc，会把活着的进程全判成死的、指标文件被清空。
         try:
-            os.remove(stale)
-        except OSError:  # 并发启动时可能已被别的进程删掉
+            os.kill(int(pid), 0)
+            continue          # 进程还在，文件正在被写
+        except ProcessLookupError:
+            pass              # 已退出，删掉
+        except (PermissionError, ValueError):
+            continue          # 判不了活（不同用户等），保守起见保留
+        try:
+            os.remove(path)
+        except OSError:  # 并发清理时可能已被删掉
             pass
+
+
+_purge_dead_process_files()
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 
@@ -168,6 +198,9 @@ def render_metrics() -> tuple[bytes, str]:
     """
     if not MULTIPROC_DIR:
         return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+    # 读之前先清掉本角色目录里死进程残留的文件（比如刚跑完的 docker exec），
+    # 否则它们的值会被算进汇总里，计数虚高。
+    _purge_dead_process_files()
     try:
         from prometheus_client.multiprocess import MultiProcessCollector
 

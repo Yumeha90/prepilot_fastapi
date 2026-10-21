@@ -4,6 +4,8 @@
  * 口径：
  * - 左右分栏 50/50：左 = 简历原文只读，右 = 结构化结果可纠错
  * - 必须人工点「通过筛选，安排面试」才能推进（确认后才进流程）
+ * - 点该按钮后落到人岗匹配页（P18，带 ?from=parse）= 进度条第三步「确认」；
+ *   原先直接跳回看板，第三步形同虚设。业务上 HR 也需要先看清匹配结果再定去留
  * - 低置信度区块标黄提示人工核对
  * - 解析失败仍可手动录入
  * - 本阶段确认后停在待处理，后续阶段接派单与首次算分
@@ -115,7 +117,10 @@ function CandidateParse() {
       } else {
         message.success(t('candidate.msg.confirmed'))
       }
-      navigate('/candidates')
+      // 第三步「确认」= 人岗匹配：确认后落到匹配页，HR 先看匹配结果再决定是否推进，
+      // 而不是直接跳回看板（那样进度条的第三步等于没走）。
+      // 取不到 application（异常兜底）才退回看板，避免落到一个没有 aid 的页面。
+      navigate(app?.id ? `/candidates/${app.id}/match?from=parse` : '/candidates')
     },
     onError: (e) => message.error(errMsg(e)),
   })

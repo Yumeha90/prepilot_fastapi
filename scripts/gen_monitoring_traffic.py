@@ -28,6 +28,7 @@ AI_TIMEOUT = 180.0
 
 HR = ("hr@prepilot.dev", "Prepilot@123")
 INTERVIEWER = ("interviewer@prepilot.dev", "Prepilot@123")
+INTERVIEWER2 = ("interviewer2@prepilot.dev", "Prepilot@123")
 
 # 一份够长的 JD（AI 拆解需要 ≥20 字，且要能拆出 3 项以上核心能力）
 JD_TEXT = """高级后端工程师（Go / 分布式存储）
@@ -186,21 +187,36 @@ def main() -> int:
                  json={"action": "advance"})
 
     step("6. 切换到面试官账号跑工作台（BR-17：写权限只给被指派的面试官）")
-    if not ctx.login(*INTERVIEWER):
-        return 1
-    # 会话提交后就变只读（BR-17），重复跑本脚本时不能再用同一个，
-    # 否则整段工作台链路全是 400 —— 挑一个还没提交的。
-    mine = [
-        c
-        for c in board_cards(ctx)
-        if c.get("session_id") and str(c.get("session_status") or "") != "submitted"
-    ]
-    if not mine:
-        print("  面试官没有可备面的会话")
+    # 会话提交后就变只读（BR-17），而且每个会话只属于**一位**面试官：
+    # 看板卡片上的 can_prepare 就是后端给出的写权限判定，必须照它挑，
+    # 否则会对着别人的会话猛点、整段链路全是 workbench.read_only。
+    # 一个账号的会话都跑完了就换下一个面试官，保证重复执行仍有流量。
+    picked = None
+    for who in (INTERVIEWER, INTERVIEWER2):
+        if not ctx.login(*who):
+            continue
+        mine = [
+            c
+            for c in board_cards(ctx)
+            if c.get("session_id")
+            and str(c.get("session_status") or "") != "submitted"
+            and c.get("can_prepare")
+        ]
+        if mine:
+            picked = mine[0]
+            print(f"  以 {who[0]} 身份备面")
+            break
+    if picked is None:
+        print("  面试官没有可备面的会话（都提交过了）")
+        dim_hint = (
+            "  提示：跑 scripts/seed_demo.py --reset 重置演示数据，"
+            "就能重新拿到未提交的会话"
+        )
+        print(dim_hint)
         return 0
-    sid = mine[0]["session_id"]
-    print(f"  选用会话 session_id={sid}（{mine[0].get('candidate_name')} / "
-          f"{mine[0].get('current_round_name')}）")
+    sid = picked["session_id"]
+    print(f"  选用会话 session_id={sid}（{picked.get('candidate_name')} / "
+          f"{picked.get('current_round_name')}）")
 
     ctx.call("POST", f"/workbench/sessions/{sid}/matrix/generate")
     ctx.call("POST", f"/workbench/sessions/{sid}/chain/generate")

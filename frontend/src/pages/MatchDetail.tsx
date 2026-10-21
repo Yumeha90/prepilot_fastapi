@@ -8,9 +8,14 @@
  *
  * AI 总结是异步补写的：summary_status=pending 时轮询 5s，
  * 不阻塞页面 —— 分数早就可用了，总结只是"为什么"。
+ *
+ * 双入口：
+ * - 看板卡片「查看 AI 匹配」：纯详情页，无进度条
+ * - 建档流程「通过筛选，安排面试」：带 ?from=parse，顶部补三步进度条（current=2）
+ *   并给出「完成，返回看板」，让第三步「确认」真正对得上
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -30,6 +35,7 @@ import {
   Select,
   Space,
   Spin,
+  Steps,
   Table,
   Tag,
   Typography,
@@ -70,9 +76,12 @@ export default function MatchDetail() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { aid } = useParams<{ aid: string }>()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const hasPerm = useAuthStore((s) => s.hasPerm)
   const applicationId = Number(aid)
+  /** 来自建档流程（点「通过筛选，安排面试」进来）→ 展示三步进度条与「完成」按钮 */
+  const fromParse = searchParams.get('from') === 'parse'
 
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [form] = Form.useForm<MatchFeedbackIn>()
@@ -462,6 +471,27 @@ export default function MatchDetail() {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {fromParse && (
+        <Card size="small">
+          <Steps
+            size="small"
+            current={2}
+            style={{ marginBottom: 12 }}
+            items={[
+              { title: t('candidate.step.upload') },
+              { title: t('candidate.step.parse') },
+              { title: t('candidate.step.confirm') },
+            ]}
+          />
+          <Alert type="success" showIcon message={t('candidate.confirmFlowHint')} />
+          <div style={{ marginTop: 12 }}>
+            <Button type="primary" onClick={() => void navigate('/candidates')}>
+              {t('candidate.finishToBoard')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Card
         size="small"
         title={
